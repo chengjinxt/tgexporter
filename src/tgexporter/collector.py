@@ -19,9 +19,10 @@ from .filename import (
     sanitize_title,
 )
 from .image_search import find_google_image_url
-from .link_enricher import enrich_links
+from .link_enricher import ExtraLink, enrich_links
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, MediaAsset
+from .placeholder_image import write_placeholder_png
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 
@@ -123,16 +124,19 @@ class TelegramCollector:
         first = messages[0]
         published_at = datetime.fromtimestamp(int(first["date"]), UTC).astimezone(self.timezone)
         date_key = published_at.strftime("%Y%m%d")
-        text = collect_text(messages)
-        title = derive_title(text, message_ids[0])
+        raw_text = collect_text(messages)
+        title = derive_title(raw_text, message_ids[0])
         daily_index = self.state.next_daily_index(date_key)
         grouped_id = first.get("media_group_id")
+        extra_links = collect_entity_links(messages)
         links = enrich_links(
-            text,
+            raw_text,
             fetch_metadata=True,
-            extra_urls=collect_entity_urls(messages),
+            extra_urls=[item.url for item in extra_links],
+            extra_links=extra_links,
             proxy_url=self.proxy_url,
         )
+        text = clean_article_text(raw_text, title, [link.name for link in links])
         article = ArticleDraft(
             source="telegram",
             channel=self.channel,
@@ -153,6 +157,8 @@ class TelegramCollector:
             article.media.extend(self._download_link_images(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_google_image(article, date_dir))
+        if not any(media.kind == "image" for media in article.media):
+            article.media.extend(self._create_placeholder_image(article, date_dir))
 
         article.status = "rendered"
         markdown_path = self.renderer.render(article)
@@ -275,6 +281,20 @@ class TelegramCollector:
             )
         ]
 
+    def _create_placeholder_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")
+        destination = date_dir / filename
+        write_placeholder_png(destination)
+        return [
+            MediaAsset(
+                kind="image",
+                filename=filename,
+                path=destination,
+                source="generated_placeholder",
+                title=article.title,
+            )
+        ]
+
     def _is_target_channel(self, chat: dict[str, Any]) -> bool:
         username = normalize_channel(str(chat.get("username", "")))
         chat_id = str(chat.get("id", ""))
@@ -314,13 +334,77 @@ def collect_text(messages: list[dict[str, Any]]) -> str:
 
 
 def collect_entity_urls(messages: list[dict[str, Any]]) -> list[str]:
-    urls: list[str] = []
+    return [item.url for item in collect_entity_links(messages)]
+
+
+def collect_entity_links(messages: list[dict[str, Any]]) -> list[ExtraLink]:
+    links: list[ExtraLink] = []
+    seen: set[str] = set()
     for message in messages:
-        for entity in (message.get("entities") or []) + (message.get("caption_entities") or []):
-            url = entity.get("url")
-            if url and url not in urls:
-                urls.append(url)
-    return urls
+        entity_sets = [
+            (message.get("text") or "", message.get("entities") or []),
+            (message.get("caption") or "", message.get("caption_entities") or []),
+        ]
+        for body, entities in entity_sets:
+            for entity in entities:
+                url = entity.get("url")
+                if url and url not in seen:
+                    seen.add(url)
+                    links.append(ExtraLink(url=url, name=entity_display_text(body, entity)))
+    return links
+
+
+def entity_display_text(text: str, entity: dict[str, Any]) -> str | None:
+    if "offset" not in entity or "length" not in entity:
+        return None
+    start_units = int(entity["offset"])
+    length_units = int(entity["length"])
+    start = utf16_index_to_py_index(text, start_units)
+    end = utf16_index_to_py_index(text, start_units + length_units)
+    value = text[start:end].strip()
+    return value or None
+
+
+def utf16_index_to_py_index(text: str, units: int) -> int:
+    count = 0
+    for index, char in enumerate(text):
+        char_units = len(char.encode("utf-16-le")) // 2
+        if count + char_units > units:
+            return index
+        count += char_units
+        if count == units:
+            return index + 1
+    return len(text)
+
+
+def clean_article_text(text: str, title: str, reference_names: list[str]) -> str:
+    reference_set = {normalize_text(name) for name in reference_names if name}
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        normalized = normalize_text(line)
+        if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
+            continue
+        if normalized == normalize_text(title):
+            continue
+        if normalized in reference_set:
+            continue
+        if is_channel_promo_line(line):
+            continue
+        lines.append(line)
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
+def normalize_text(value: str) -> str:
+    return re.sub(r"\s+", "", value).strip().lower()
+
+
+def is_channel_promo_line(line: str) -> bool:
+    return any(marker in line for marker in ("在花频道", "茶馆水群", "投稿通道"))
 
 
 def select_latest_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:

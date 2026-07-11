@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from tgexporter.collector import TelegramCollector, choose_video_variant, collect_entity_urls
+from tgexporter.collector import (
+    TelegramCollector,
+    choose_video_variant,
+    clean_article_text,
+    collect_entity_links,
+    collect_entity_urls,
+)
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.state import StateStore
 
@@ -107,9 +113,25 @@ def test_choose_video_variant_prefers_downloadable_h264():
 def test_collect_entity_urls_reads_hidden_text_links():
     messages = [
         {
-            "entities": [{"type": "text_link", "url": "https://example.com/a"}],
-            "caption_entities": [{"type": "text_link", "url": "https://news.example.com/b"}],
+            "text": "来源 Example",
+            "caption": "新闻 News",
+            "entities": [{"type": "text_link", "offset": 3, "length": 7, "url": "https://example.com/a"}],
+            "caption_entities": [{"type": "text_link", "offset": 3, "length": 4, "url": "https://news.example.com/b"}],
         }
     ]
 
     assert collect_entity_urls(messages) == ["https://example.com/a", "https://news.example.com/b"]
+    assert [item.name for item in collect_entity_links(messages)] == ["Example", "News"]
+
+
+def test_clean_article_text_removes_title_reference_and_channel_promo():
+    text = """测试标题
+
+正文第一段
+
+BleepingComputer
+
+🌸 在花频道 · 茶馆水群 · 投稿通道
+"""
+
+    assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"

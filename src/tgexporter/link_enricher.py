@@ -25,6 +25,12 @@ class PageMetadata:
     image_url: str | None = None
 
 
+@dataclass(frozen=True)
+class ExtraLink:
+    url: str
+    name: str | None = None
+
+
 def extract_urls(text: str) -> list[str]:
     found: list[str] = []
     for match in URL_RE.finditer(text or ""):
@@ -38,10 +44,17 @@ def enrich_links(
     text: str,
     fetch_metadata: bool = True,
     extra_urls: list[str] | None = None,
+    extra_links: list[ExtraLink] | None = None,
     proxy_url: str | None = None,
 ) -> list[LinkRef]:
     links: list[LinkRef] = []
+    link_names: dict[str, str] = {}
     urls = extract_urls(text)
+    for item in extra_links or []:
+        if item.url not in urls:
+            urls.append(item.url)
+        if item.name:
+            link_names[item.url] = item.name
     for url in extra_urls or []:
         if url not in urls:
             urls.append(url)
@@ -49,7 +62,7 @@ def enrich_links(
         if should_ignore_url(url):
             continue
         metadata = fetch_page_metadata(url, proxy_url=proxy_url) if fetch_metadata else PageMetadata()
-        name = metadata.title or urllib.parse.urlparse(url).netloc or url
+        name = link_names.get(url) or metadata.title or urllib.parse.urlparse(url).netloc or url
         links.append(LinkRef(name=clean_text(name), url=url, image_url=metadata.image_url))
     return links
 

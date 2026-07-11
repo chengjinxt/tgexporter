@@ -40,10 +40,18 @@ class MarkdownRenderer:
             ]
         )
 
+        image_media = [media for media in article.media if media.kind == "image"]
+        other_media = [media for media in article.media if media.kind != "image"]
+
+        for media in image_media:
+            alt = media.title or article.title
+            lines.append(f"![{alt}]({media.filename})")
+            lines.append("")
+
         if article.text.strip():
             lines.extend([article.text.strip(), ""])
 
-        for media in article.media:
+        for media in other_media:
             if media.kind == "image":
                 alt = media.title or article.title
                 lines.append(f"![{alt}]({media.filename})")

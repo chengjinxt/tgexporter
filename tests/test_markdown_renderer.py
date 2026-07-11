@@ -33,3 +33,4 @@ def test_markdown_renderer_outputs_frontmatter_and_media(tmp_path: Path):
     assert 'title: "测试文章"' in text
     assert "![测试文章](20260711_001_PIC_001_测试文章.jpg)" in text
     assert "\nExample\n\nhttps://example.com\n" in text
+    assert text.index("![测试文章]") < text.index("正文")
