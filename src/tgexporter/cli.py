@@ -57,6 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--auto-fill", action="store_true", help="Try filling WeChat editor automatically.")
     publish.add_argument("--no-playwright", action="store_true", help="Use default browser instead of Playwright.")
     publish.add_argument("--headless", action="store_true", help="Run Playwright headless.")
+    publish.add_argument("--login-timeout", type=int, default=180, help="Seconds to wait for WeChat browser login.")
+    publish.add_argument("--review-timeout", type=int, default=0, help="Seconds to keep the browser open after auto-fill.")
     publish.set_defaults(func=cmd_publish_wechat)
 
     return parser
@@ -133,7 +135,12 @@ def cmd_publish_wechat(args) -> int:
     publisher = WechatPublisher(config.wechat.profile_dir)
     article = args.article.resolve()
     if args.auto_fill:
-        preview = publisher.try_auto_fill(article, headless=args.headless)
+        preview = publisher.try_auto_fill(
+            article,
+            headless=args.headless,
+            login_timeout_seconds=args.login_timeout,
+            review_timeout_seconds=args.review_timeout,
+        )
     else:
         preview = publisher.open_assisted(
             article,
