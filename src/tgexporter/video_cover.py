@@ -98,8 +98,6 @@ def draw_cover_text(image: Image.Image, title: str, brand: str = BRAND_TEXT) -> 
     margin = max(32, int(min(width, height) * 0.045))
     brand_font = load_font(max(30, int(min(width, height) * 0.055)))
     title_font = load_font(max(48, int(min(width, height) * 0.09)))
-    footer_font = load_font(max(26, int(min(width, height) * 0.043)))
-
     draw.text(
         (margin, margin),
         brand,
@@ -121,15 +119,6 @@ def draw_cover_text(image: Image.Image, title: str, brand: str = BRAND_TEXT) -> 
             stroke_fill=(0, 0, 0),
         )
         title_y += int(title_font.size * 1.16)
-
-    draw.text(
-        (margin, height - margin - footer_font.size),
-        "Telegram 资讯同步",
-        font=footer_font,
-        fill=(255, 255, 255),
-        stroke_width=max(2, width // 600),
-        stroke_fill=(0, 0, 0),
-    )
     return image
 
 
