@@ -26,6 +26,7 @@ from .models import ArticleDraft, MediaAsset
 from .placeholder_image import write_placeholder_png
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
+from .video_cover import create_video_cover
 
 BOT_API_DOWNLOAD_LIMIT = 20_000_000
 
@@ -154,6 +155,8 @@ class TelegramCollector:
         date_dir = self.renderer.base_dir / date_key
         date_dir.mkdir(parents=True, exist_ok=True)
         article.media.extend(self._download_message_media(messages, article, date_dir))
+        if not any(media.kind == "image" for media in article.media):
+            article.media.extend(self._create_video_cover(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_link_images(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
@@ -299,6 +302,24 @@ class TelegramCollector:
                 path=destination,
                 source="generated_placeholder",
                 title=article.title,
+            )
+        ]
+
+    def _create_video_cover(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        videos = [media for media in article.media if media.kind == "video" and media.path.exists()]
+        if not videos:
+            return []
+        filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".jpg")
+        destination = date_dir / filename
+        if not create_video_cover(videos[0].path, destination, article.title):
+            return []
+        return [
+            MediaAsset(
+                kind="image",
+                filename=filename,
+                path=destination,
+                source="video_cover",
+                title=f"视频封面：{article.title}",
             )
         ]
 
