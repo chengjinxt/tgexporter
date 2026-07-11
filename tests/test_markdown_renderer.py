@@ -32,5 +32,4 @@ def test_markdown_renderer_outputs_frontmatter_and_media(tmp_path: Path):
     assert path.name == "20260711_001_测试文章.md"
     assert 'title: "测试文章"' in text
     assert "![测试文章](20260711_001_PIC_001_测试文章.jpg)" in text
-    assert "- Example：https://example.com" in text
-
+    assert "\nExample\n\nhttps://example.com\n" in text

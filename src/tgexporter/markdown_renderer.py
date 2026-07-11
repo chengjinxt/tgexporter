@@ -56,10 +56,11 @@ class MarkdownRenderer:
             lines.append("")
 
         if article.links:
-            lines.extend(["## 引用来源", ""])
             for link in article.links:
-                lines.append(f"- {link.name}：{link.url}")
-            lines.append("")
+                lines.append(link.name)
+                lines.append("")
+                lines.append(link.url)
+                lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
 
@@ -67,4 +68,3 @@ class MarkdownRenderer:
 def quote_yaml(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
-

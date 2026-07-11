@@ -2,6 +2,7 @@
 bot_token = ""
 channel = "TechnologyNewsSyncAssistant"
 poll_timeout_seconds = 30
+proxy_url = ""
 
 [output]
 base_dir = "发布内容"
@@ -18,4 +19,3 @@ api_id = ""
 api_hash = ""
 phone = ""
 session_file = "data/telegram.session"
-

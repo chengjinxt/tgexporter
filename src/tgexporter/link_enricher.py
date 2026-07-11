@@ -16,6 +16,7 @@ META_RE = re.compile(
     re.IGNORECASE,
 )
 CONTENT_RE = re.compile(r"content=[\"'](?P<content>.*?)[\"']", re.IGNORECASE | re.DOTALL)
+IGNORED_DOMAINS = {"mp.weixin.qq.com", "t.me", "telegram.me"}
 
 
 @dataclass(frozen=True)
@@ -33,16 +34,27 @@ def extract_urls(text: str) -> list[str]:
     return found
 
 
-def enrich_links(text: str, fetch_metadata: bool = True) -> list[LinkRef]:
+def enrich_links(
+    text: str,
+    fetch_metadata: bool = True,
+    extra_urls: list[str] | None = None,
+    proxy_url: str | None = None,
+) -> list[LinkRef]:
     links: list[LinkRef] = []
-    for url in extract_urls(text):
-        metadata = fetch_page_metadata(url) if fetch_metadata else PageMetadata()
+    urls = extract_urls(text)
+    for url in extra_urls or []:
+        if url not in urls:
+            urls.append(url)
+    for url in urls:
+        if should_ignore_url(url):
+            continue
+        metadata = fetch_page_metadata(url, proxy_url=proxy_url) if fetch_metadata else PageMetadata()
         name = metadata.title or urllib.parse.urlparse(url).netloc or url
         links.append(LinkRef(name=clean_text(name), url=url, image_url=metadata.image_url))
     return links
 
 
-def fetch_page_metadata(url: str, timeout: int = 8) -> PageMetadata:
+def fetch_page_metadata(url: str, timeout: int = 8, proxy_url: str | None = None) -> PageMetadata:
     request = urllib.request.Request(
         url,
         headers={
@@ -51,7 +63,7 @@ def fetch_page_metadata(url: str, timeout: int = 8) -> PageMetadata:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with build_opener(proxy_url).open(request, timeout=timeout) as response:
             content_type = response.headers.get("Content-Type", "")
             if "text/html" not in content_type and "application/xhtml" not in content_type:
                 return PageMetadata()
@@ -70,6 +82,18 @@ def fetch_page_metadata(url: str, timeout: int = 8) -> PageMetadata:
 
 def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(value)).strip()
+
+
+def should_ignore_url(url: str) -> bool:
+    hostname = urllib.parse.urlparse(url).hostname or ""
+    hostname = hostname.lower()
+    return hostname in IGNORED_DOMAINS
+
+
+def build_opener(proxy_url: str | None = None) -> urllib.request.OpenerDirector:
+    if proxy_url:
+        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}))
+    return urllib.request.build_opener()
 
 
 def _find_title(html_text: str) -> str | None:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tgexporter.collector import TelegramCollector
+from tgexporter.collector import TelegramCollector, choose_video_variant, collect_entity_urls
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.state import StateStore
 
@@ -86,3 +86,30 @@ def test_collector_groups_media_album(tmp_path: Path):
     assert (paths[0].parent / "20260711_001_PIC_001_相册文章.jpg").exists()
     assert (paths[0].parent / "20260711_001_PIC_002_相册文章.jpg").exists()
 
+
+def test_choose_video_variant_prefers_downloadable_h264():
+    video = {
+        "file_id": "original",
+        "file_size": 122_000_000,
+        "width": 3840,
+        "height": 2160,
+        "qualities": [
+            {"file_id": "av1-720", "file_size": 6_000_000, "width": 1280, "height": 720, "codec": "av01"},
+            {"file_id": "h264-480", "file_size": 4_000_000, "width": 852, "height": 480, "codec": "h264"},
+            {"file_id": "h264-1080", "file_size": 18_000_000, "width": 1920, "height": 1080, "codec": "h264"},
+            {"file_id": "h264-too-big", "file_size": 24_000_000, "width": 1920, "height": 1080, "codec": "h264"},
+        ],
+    }
+
+    assert choose_video_variant(video)["file_id"] == "h264-1080"
+
+
+def test_collect_entity_urls_reads_hidden_text_links():
+    messages = [
+        {
+            "entities": [{"type": "text_link", "url": "https://example.com/a"}],
+            "caption_entities": [{"type": "text_link", "url": "https://news.example.com/b"}],
+        }
+    ]
+
+    assert collect_entity_urls(messages) == ["https://example.com/a", "https://news.example.com/b"]

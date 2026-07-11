@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import urllib.parse
 from pathlib import Path
 
 from .models import ArticleDraft
+
+IGNORED_STAT_DOMAINS = {"mp.weixin.qq.com", "t.me", "telegram.me"}
 
 
 class StateStore:
@@ -72,6 +75,17 @@ class StateStore:
                     """,
                     (article.channel, message_id, article_key(article)),
                 )
+            for link in article.links:
+                domain = domain_from_url(link.url)
+                if not domain or domain in IGNORED_STAT_DOMAINS:
+                    continue
+                conn.execute(
+                    """
+                    insert or ignore into reference_domains(article_key, url, domain, name)
+                    values (?, ?, ?, ?)
+                    """,
+                    (article_key(article), link.url, domain, link.name),
+                )
 
     def update_article_status(self, article_path: Path, status: str, error: str | None = None) -> None:
         with self._connect() as conn:
@@ -83,6 +97,21 @@ class StateStore:
                 """,
                 (status, error, str(article_path)),
             )
+
+    def domain_stats(self, limit: int = 50) -> list[tuple[str, int]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select domain, count(*) as count
+                from reference_domains
+                where domain not in ('mp.weixin.qq.com', 't.me', 'telegram.me')
+                group by domain
+                order by count desc, domain asc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [(str(domain), int(count)) for domain, count in rows]
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -124,6 +153,18 @@ class StateStore:
                     created_at text not null default current_timestamp,
                     primary key(channel, message_id)
                 );
+
+                create table if not exists reference_domains (
+                    article_key text not null,
+                    url text not null,
+                    domain text not null,
+                    name text not null,
+                    created_at text not null default current_timestamp,
+                    primary key(article_key, url)
+                );
+
+                create index if not exists idx_reference_domains_domain
+                on reference_domains(domain);
                 """
             )
 
@@ -134,3 +175,10 @@ def article_key(article: ArticleDraft) -> str:
     ids = "-".join(str(item) for item in article.message_ids)
     return f"{article.channel}:messages:{ids}"
 
+
+def domain_from_url(url: str) -> str:
+    hostname = urllib.parse.urlparse(url).hostname or ""
+    hostname = hostname.lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    return hostname

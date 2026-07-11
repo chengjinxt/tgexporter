@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,11 +18,14 @@ from .filename import (
     media_filename,
     sanitize_title,
 )
+from .image_search import find_google_image_url
 from .link_enricher import enrich_links
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, MediaAsset
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
+
+BOT_API_DOWNLOAD_LIMIT = 20_000_000
 
 
 class TelegramCollector:
@@ -32,14 +36,16 @@ class TelegramCollector:
         renderer: MarkdownRenderer,
         channel: str,
         timezone: str = "Asia/Shanghai",
+        proxy_url: str | None = None,
     ) -> None:
         self.client = client
         self.state = state
         self.renderer = renderer
         self.channel = normalize_channel(channel)
         self.timezone = ZoneInfo(timezone)
+        self.proxy_url = proxy_url
 
-    def poll_once(self, timeout: int = 30) -> list[Path]:
+    def poll_once(self, timeout: int = 30, latest_only: bool = False) -> list[Path]:
         last_update_id = self.state.get_last_update_id()
         offset = last_update_id + 1 if last_update_id is not None else None
         updates = self.client.get_updates(
@@ -47,10 +53,22 @@ class TelegramCollector:
             timeout=timeout,
             allowed_updates=["channel_post", "edited_channel_post"],
         )
+        if latest_only:
+            updates = select_latest_updates(updates)
         paths = self.process_updates(updates)
         if updates:
             self.state.set_last_update_id(max(int(item["update_id"]) for item in updates))
         return paths
+
+    def drop_pending(self, timeout: int = 1) -> int:
+        updates = self.client.get_updates(
+            timeout=timeout,
+            allowed_updates=["channel_post", "edited_channel_post"],
+        )
+        if not updates:
+            return 0
+        self.state.set_last_update_id(max(int(item["update_id"]) for item in updates))
+        return len(updates)
 
     def listen_forever(self, timeout: int = 30, on_article=None) -> None:
         while True:
@@ -77,16 +95,24 @@ class TelegramCollector:
 
         rendered: list[Path] = []
         for message in singles:
-            path = self._process_message_group([message])
+            path = self._process_group_safely([message])
             if path:
                 rendered.append(path)
 
         for messages in groups.values():
-            path = self._process_message_group(messages)
+            path = self._process_group_safely(messages)
             if path:
                 rendered.append(path)
 
         return rendered
+
+    def _process_group_safely(self, messages: list[dict[str, Any]]) -> Path | None:
+        try:
+            return self._process_message_group(messages)
+        except Exception as exc:
+            message_ids = [str(item.get("message_id", "?")) for item in messages]
+            print(f"Skipped Telegram message(s) {', '.join(message_ids)}: {exc}", file=sys.stderr)
+            return None
 
     def _process_message_group(self, messages: list[dict[str, Any]]) -> Path | None:
         messages = sorted(messages, key=lambda item: int(item["message_id"]))
@@ -101,7 +127,12 @@ class TelegramCollector:
         title = derive_title(text, message_ids[0])
         daily_index = self.state.next_daily_index(date_key)
         grouped_id = first.get("media_group_id")
-        links = enrich_links(text, fetch_metadata=True)
+        links = enrich_links(
+            text,
+            fetch_metadata=True,
+            extra_urls=collect_entity_urls(messages),
+            proxy_url=self.proxy_url,
+        )
         article = ArticleDraft(
             source="telegram",
             channel=self.channel,
@@ -120,6 +151,8 @@ class TelegramCollector:
         article.media.extend(self._download_message_media(messages, article, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_link_images(article, date_dir))
+        if not any(media.kind == "image" for media in article.media):
+            article.media.extend(self._download_google_image(article, date_dir))
 
         article.status = "rendered"
         markdown_path = self.renderer.render(article)
@@ -155,8 +188,28 @@ class TelegramCollector:
                     )
                     destination = date_dir / filename
                     self.client.download_file(file_info["file_path"], destination)
-                except TelegramBotError:
-                    raise
+                except TelegramBotError as exc:
+                    if kind == "image":
+                        print(f"Skipped image in message {message.get('message_id')}: {exc}", file=sys.stderr)
+                        continue
+                    if "file is too big" not in str(exc).lower():
+                        print(f"Skipped {kind} in message {message.get('message_id')}: {exc}", file=sys.stderr)
+                    filename = media_filename(
+                        article.date_key,
+                        article.daily_index,
+                        "FILE",
+                        counters[kind],
+                        article.title,
+                        ".txt",
+                    )
+                    destination = date_dir / filename
+                    destination.write_text(
+                        "Telegram Bot API 无法下载该媒体文件，原因：文件超过 Bot API getFile 限制。\n"
+                        f"媒体类型：{kind}\n"
+                        f"原始文件名：{media.title or ''}\n",
+                        encoding="utf-8",
+                    )
+                    kind = "file"
                 assets.append(
                     MediaAsset(
                         kind=kind,
@@ -185,7 +238,7 @@ class TelegramCollector:
                 extension,
             )
             destination = date_dir / filename
-            if download_web_file(link.image_url, destination):
+            if download_web_file(link.image_url, destination, proxy_url=self.proxy_url):
                 assets.append(
                     MediaAsset(
                         kind="image",
@@ -196,6 +249,31 @@ class TelegramCollector:
                     )
                 )
         return assets
+
+    def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        image_url = find_google_image_url(article.title, proxy_url=self.proxy_url)
+        if not image_url:
+            return []
+        filename = media_filename(
+            article.date_key,
+            article.daily_index,
+            "PIC",
+            1,
+            article.title,
+            extension_from_url(image_url, ".jpg"),
+        )
+        destination = date_dir / filename
+        if not download_web_file(image_url, destination, proxy_url=self.proxy_url):
+            return []
+        return [
+            MediaAsset(
+                kind="image",
+                filename=filename,
+                path=destination,
+                source="google_image_search",
+                title=f"Google 图片搜索：{article.title}",
+            )
+        ]
 
     def _is_target_channel(self, chat: dict[str, Any]) -> bool:
         username = normalize_channel(str(chat.get("username", "")))
@@ -235,6 +313,32 @@ def collect_text(messages: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
+def collect_entity_urls(messages: list[dict[str, Any]]) -> list[str]:
+    urls: list[str] = []
+    for message in messages:
+        for entity in (message.get("entities") or []) + (message.get("caption_entities") or []):
+            url = entity.get("url")
+            if url and url not in urls:
+                urls.append(url)
+    return urls
+
+
+def select_latest_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not updates:
+        return []
+    latest = max(updates, key=lambda item: int(item["update_id"]))
+    latest_message = latest.get("channel_post") or latest.get("edited_channel_post") or {}
+    latest_group_id = latest_message.get("media_group_id")
+    if not latest_group_id:
+        return [latest]
+    selected: list[dict[str, Any]] = []
+    for update in updates:
+        message = update.get("channel_post") or update.get("edited_channel_post") or {}
+        if message.get("media_group_id") == latest_group_id:
+            selected.append(update)
+    return selected
+
+
 def derive_title(text: str, message_id: int) -> str:
     for line in text.splitlines():
         candidate = line.strip().strip("#>-* ")
@@ -262,9 +366,10 @@ def iter_message_media(message: dict[str, Any]) -> list[MessageMedia]:
 
     video = message.get("video")
     if video:
+        video_file = choose_video_variant(video)
         media.append(
             MessageMedia(
-                file_id=video["file_id"],
+                file_id=video_file["file_id"],
                 kind="video",
                 filename_kind="VID",
                 default_extension=".mp4",
@@ -275,9 +380,10 @@ def iter_message_media(message: dict[str, Any]) -> list[MessageMedia]:
 
     animation = message.get("animation")
     if animation:
+        animation_file = choose_video_variant(animation)
         media.append(
             MessageMedia(
-                file_id=animation["file_id"],
+                file_id=animation_file["file_id"],
                 kind="video",
                 filename_kind="VID",
                 default_extension=".mp4",
@@ -325,6 +431,24 @@ def iter_message_media(message: dict[str, Any]) -> list[MessageMedia]:
     return media
 
 
+def choose_video_variant(video: dict[str, Any]) -> dict[str, Any]:
+    original = {
+        "file_id": video["file_id"],
+        "file_size": int(video.get("file_size") or 0),
+        "width": int(video.get("width") or 0),
+        "height": int(video.get("height") or 0),
+        "codec": video.get("codec", ""),
+    }
+    variants = [original]
+    variants.extend(video.get("qualities") or [])
+    downloadable = [item for item in variants if 0 < int(item.get("file_size") or 0) <= BOT_API_DOWNLOAD_LIMIT]
+    if downloadable:
+        h264 = [item for item in downloadable if str(item.get("codec", "")).lower() == "h264"]
+        pool = h264 or downloadable
+        return max(pool, key=lambda item: (int(item.get("width") or 0) * int(item.get("height") or 0), int(item.get("file_size") or 0)))
+    return min(variants, key=lambda item: int(item.get("file_size") or BOT_API_DOWNLOAD_LIMIT + 1))
+
+
 def extension_from_url(url: str, fallback: str) -> str:
     suffix = Path(urllib.parse.urlparse(url).path).suffix
     if suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
@@ -332,14 +456,15 @@ def extension_from_url(url: str, fallback: str) -> str:
     return fallback
 
 
-def download_web_file(url: str, destination: Path) -> bool:
+def download_web_file(url: str, destination: Path, proxy_url: str | None = None) -> bool:
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 tgexporter/0.1"})
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
+        from .link_enricher import build_opener
+
+        with build_opener(proxy_url).open(request, timeout=20) as response:
             destination.parent.mkdir(parents=True, exist_ok=True)
             with destination.open("wb") as file:
                 shutil.copyfileobj(response, file)
         return True
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False
-

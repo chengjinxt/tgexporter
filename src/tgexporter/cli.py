@@ -33,13 +33,21 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = subparsers.add_parser("doctor", help="Check local config and Telegram bot token.")
     doctor.set_defaults(func=cmd_doctor)
 
+    stats = subparsers.add_parser("stats-domains", help="Show source domain statistics from rendered articles.")
+    stats.add_argument("--limit", type=int, default=50, help="Maximum number of domains to show.")
+    stats.set_defaults(func=cmd_stats_domains)
+
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
     listen.add_argument("--once", action="store_true", help="Poll once and exit.")
+    listen.add_argument("--latest-only", action="store_true", help="Process only the newest pending update.")
+    listen.add_argument("--drop-pending", action="store_true", help="Mark current pending updates as consumed without rendering.")
     listen.add_argument("--timeout", type=int, default=None, help="Bot API long-poll timeout seconds.")
     listen.set_defaults(func=cmd_listen)
 
     run = subparsers.add_parser("run", help="Listen and optionally open WeChat draft helper.")
     run.add_argument("--once", action="store_true", help="Poll once and exit.")
+    run.add_argument("--latest-only", action="store_true", help="Process only the newest pending update.")
+    run.add_argument("--drop-pending", action="store_true", help="Mark current pending updates as consumed without rendering.")
     run.add_argument("--draft", action="store_true", help="Open WeChat assisted draft flow for each rendered article.")
     run.add_argument("--timeout", type=int, default=None, help="Bot API long-poll timeout seconds.")
     run.set_defaults(func=cmd_run)
@@ -57,11 +65,12 @@ def build_parser() -> argparse.ArgumentParser:
 def cmd_doctor(args) -> int:
     config = load_config(args.root)
     require_bot_token(config)
-    client = TelegramBotClient(config.telegram.bot_token)
+    client = TelegramBotClient(config.telegram.bot_token, proxy_url=config.telegram.proxy_url)
     me = client.get_me()
     print(f"Bot: @{me.get('username')} ({me.get('first_name')})")
     print(f"Token: {mask_secret(config.telegram.bot_token)}")
     print(f"Channel: @{config.telegram.channel.lstrip('@')}")
+    print(f"Proxy: {config.telegram.proxy_url or 'direct'}")
     print(f"Output: {config.output.base_dir}")
     print(f"WeChat profile: {config.wechat.profile_dir}")
     return 0
@@ -70,11 +79,26 @@ def cmd_doctor(args) -> int:
 def cmd_listen(args) -> int:
     collector, config = build_collector(args.root)
     timeout = args.timeout or config.telegram.poll_timeout_seconds
+    if args.drop_pending:
+        count = collector.drop_pending(timeout=1)
+        print(f"Dropped {count} pending update(s).")
+        return 0
     if args.once:
-        paths = collector.poll_once(timeout=timeout)
+        paths = collector.poll_once(timeout=timeout, latest_only=args.latest_only)
         print_rendered(paths)
         return 0
     collector.listen_forever(timeout=timeout)
+    return 0
+
+
+def cmd_stats_domains(args) -> int:
+    state = StateStore(args.root / "data" / "state.sqlite")
+    rows = state.domain_stats(limit=args.limit)
+    if not rows:
+        print("No reference domains recorded yet.")
+        return 0
+    for domain, count in rows:
+        print(f"{domain}\t{count}")
     return 0
 
 
@@ -82,6 +106,10 @@ def cmd_run(args) -> int:
     collector, config = build_collector(args.root)
     timeout = args.timeout or config.telegram.poll_timeout_seconds
     publisher = WechatPublisher(config.wechat.profile_dir) if args.draft else None
+    if args.drop_pending:
+        count = collector.drop_pending(timeout=1)
+        print(f"Dropped {count} pending update(s).")
+        return 0
 
     def on_article(path: Path) -> None:
         print(f"Rendered: {path}")
@@ -90,7 +118,7 @@ def cmd_run(args) -> int:
             print(f"WeChat preview: {preview}")
 
     if args.once:
-        paths = collector.poll_once(timeout=timeout)
+        paths = collector.poll_once(timeout=timeout, latest_only=args.latest_only)
         for path in paths:
             on_article(path)
         if not paths:
@@ -121,13 +149,14 @@ def build_collector(root: Path) -> tuple[TelegramCollector, object]:
     require_bot_token(config)
     state = StateStore(root / "data" / "state.sqlite")
     renderer = MarkdownRenderer(config.output.base_dir)
-    client = TelegramBotClient(config.telegram.bot_token)
+    client = TelegramBotClient(config.telegram.bot_token, proxy_url=config.telegram.proxy_url)
     collector = TelegramCollector(
         client=client,
         state=state,
         renderer=renderer,
         channel=config.telegram.channel,
         timezone=config.output.timezone,
+        proxy_url=config.telegram.proxy_url,
     )
     return collector, config
 
@@ -142,4 +171,3 @@ def print_rendered(paths: list[Path]) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

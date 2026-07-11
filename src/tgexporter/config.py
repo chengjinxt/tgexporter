@@ -11,6 +11,7 @@ class TelegramConfig:
     bot_token: str
     channel: str
     poll_timeout_seconds: int = 30
+    proxy_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     bot_token = _pick(env, "TG_BOT_TOKEN", telegram.get("bot_token", ""))
     channel = _pick(env, "TG_CHANNEL", telegram.get("channel", "TechnologyNewsSyncAssistant"))
     timeout = int(_pick(env, "TG_POLL_TIMEOUT_SECONDS", telegram.get("poll_timeout_seconds", 30)))
+    proxy_url = _pick(env, "TELEGRAM_PROXY_URL", telegram.get("proxy_url", "")) or None
     output_base = _pick(env, "OUTPUT_BASE_DIR", output.get("base_dir", "发布内容"))
     timezone = _pick(env, "OUTPUT_TIMEZONE", output.get("timezone", "Asia/Shanghai"))
     profile_dir = _pick(env, "WECHAT_PROFILE_DIR", wechat.get("profile_dir", "runtime/wechat-profile"))
@@ -56,6 +58,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
             bot_token=bot_token,
             channel=channel,
             poll_timeout_seconds=timeout,
+            proxy_url=proxy_url,
         ),
         output=OutputConfig(base_dir=_resolve(root, output_base), timezone=timezone),
         wechat=WechatConfig(
@@ -106,4 +109,3 @@ def _resolve(root: Path, value: str | Path) -> Path:
     if path.is_absolute():
         return path
     return root / path
-
