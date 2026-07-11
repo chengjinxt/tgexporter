@@ -1,0 +1,21 @@
+[telegram]
+bot_token = ""
+channel = "TechnologyNewsSyncAssistant"
+poll_timeout_seconds = 30
+
+[output]
+base_dir = "发布内容"
+timezone = "Asia/Shanghai"
+
+[wechat]
+profile_dir = "runtime/wechat-profile"
+default_mode = "draft"
+author = "程锦学堂"
+
+[telethon]
+enabled = false
+api_id = ""
+api_hash = ""
+phone = ""
+session_file = "data/telegram.session"
+

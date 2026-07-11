@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from .collector import TelegramCollector
+from .config import load_config, mask_secret, require_bot_token
+from .markdown_renderer import MarkdownRenderer
+from .state import StateStore
+from .telegram_bot import TelegramBotClient
+from .wechat_publisher import WechatPublisher
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return int(args.func(args))
+    except KeyboardInterrupt:
+        print("Stopped.")
+        return 130
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tgexporter")
+    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Project root directory.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    doctor = subparsers.add_parser("doctor", help="Check local config and Telegram bot token.")
+    doctor.set_defaults(func=cmd_doctor)
+
+    listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
+    listen.add_argument("--once", action="store_true", help="Poll once and exit.")
+    listen.add_argument("--timeout", type=int, default=None, help="Bot API long-poll timeout seconds.")
+    listen.set_defaults(func=cmd_listen)
+
+    run = subparsers.add_parser("run", help="Listen and optionally open WeChat draft helper.")
+    run.add_argument("--once", action="store_true", help="Poll once and exit.")
+    run.add_argument("--draft", action="store_true", help="Open WeChat assisted draft flow for each rendered article.")
+    run.add_argument("--timeout", type=int, default=None, help="Bot API long-poll timeout seconds.")
+    run.set_defaults(func=cmd_run)
+
+    publish = subparsers.add_parser("publish-wechat", help="Open WeChat assisted draft flow for one Markdown article.")
+    publish.add_argument("--article", type=Path, required=True, help="Markdown article path.")
+    publish.add_argument("--auto-fill", action="store_true", help="Try filling WeChat editor automatically.")
+    publish.add_argument("--no-playwright", action="store_true", help="Use default browser instead of Playwright.")
+    publish.add_argument("--headless", action="store_true", help="Run Playwright headless.")
+    publish.set_defaults(func=cmd_publish_wechat)
+
+    return parser
+
+
+def cmd_doctor(args) -> int:
+    config = load_config(args.root)
+    require_bot_token(config)
+    client = TelegramBotClient(config.telegram.bot_token)
+    me = client.get_me()
+    print(f"Bot: @{me.get('username')} ({me.get('first_name')})")
+    print(f"Token: {mask_secret(config.telegram.bot_token)}")
+    print(f"Channel: @{config.telegram.channel.lstrip('@')}")
+    print(f"Output: {config.output.base_dir}")
+    print(f"WeChat profile: {config.wechat.profile_dir}")
+    return 0
+
+
+def cmd_listen(args) -> int:
+    collector, config = build_collector(args.root)
+    timeout = args.timeout or config.telegram.poll_timeout_seconds
+    if args.once:
+        paths = collector.poll_once(timeout=timeout)
+        print_rendered(paths)
+        return 0
+    collector.listen_forever(timeout=timeout)
+    return 0
+
+
+def cmd_run(args) -> int:
+    collector, config = build_collector(args.root)
+    timeout = args.timeout or config.telegram.poll_timeout_seconds
+    publisher = WechatPublisher(config.wechat.profile_dir) if args.draft else None
+
+    def on_article(path: Path) -> None:
+        print(f"Rendered: {path}")
+        if publisher:
+            preview = publisher.open_assisted(path, use_playwright=True)
+            print(f"WeChat preview: {preview}")
+
+    if args.once:
+        paths = collector.poll_once(timeout=timeout)
+        for path in paths:
+            on_article(path)
+        if not paths:
+            print("No new channel posts.")
+        return 0
+    collector.listen_forever(timeout=timeout, on_article=on_article)
+    return 0
+
+
+def cmd_publish_wechat(args) -> int:
+    config = load_config(args.root)
+    publisher = WechatPublisher(config.wechat.profile_dir)
+    article = args.article.resolve()
+    if args.auto_fill:
+        preview = publisher.try_auto_fill(article, headless=args.headless)
+    else:
+        preview = publisher.open_assisted(
+            article,
+            use_playwright=not args.no_playwright,
+            headless=args.headless,
+        )
+    print(f"WeChat preview: {preview}")
+    return 0
+
+
+def build_collector(root: Path) -> tuple[TelegramCollector, object]:
+    config = load_config(root)
+    require_bot_token(config)
+    state = StateStore(root / "data" / "state.sqlite")
+    renderer = MarkdownRenderer(config.output.base_dir)
+    client = TelegramBotClient(config.telegram.bot_token)
+    collector = TelegramCollector(
+        client=client,
+        state=state,
+        renderer=renderer,
+        channel=config.telegram.channel,
+        timezone=config.output.timezone,
+    )
+    return collector, config
+
+
+def print_rendered(paths: list[Path]) -> None:
+    if not paths:
+        print("No new channel posts.")
+        return
+    for path in paths:
+        print(f"Rendered: {path}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
