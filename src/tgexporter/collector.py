@@ -19,6 +19,7 @@ from .filename import (
     sanitize_title,
 )
 from .image_search import find_google_image_url
+from .image_filter import is_suitable_article_image
 from .link_enricher import ExtraLink, enrich_links
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, MediaAsset
@@ -228,7 +229,6 @@ class TelegramCollector:
         return assets
 
     def _download_link_images(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
-        assets: list[MediaAsset] = []
         seen: set[str] = set()
         for link in article.links:
             if not link.image_url or link.image_url in seen:
@@ -244,17 +244,21 @@ class TelegramCollector:
                 extension,
             )
             destination = date_dir / filename
-            if download_web_file(link.image_url, destination, proxy_url=self.proxy_url):
-                assets.append(
-                    MediaAsset(
-                        kind="image",
-                        filename=filename,
-                        path=destination,
-                        source="web_og_image",
-                        title=link.name,
-                    )
+            if not download_web_file(link.image_url, destination, proxy_url=self.proxy_url):
+                continue
+            if not is_suitable_article_image(destination):
+                destination.unlink(missing_ok=True)
+                continue
+            return [
+                MediaAsset(
+                    kind="image",
+                    filename=filename,
+                    path=destination,
+                    source="web_og_image",
+                    title=link.name,
                 )
-        return assets
+            ]
+        return []
 
     def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         image_url = find_google_image_url(article.title, proxy_url=self.proxy_url)
@@ -270,6 +274,9 @@ class TelegramCollector:
         )
         destination = date_dir / filename
         if not download_web_file(image_url, destination, proxy_url=self.proxy_url):
+            return []
+        if not is_suitable_article_image(destination):
+            destination.unlink(missing_ok=True)
             return []
         return [
             MediaAsset(

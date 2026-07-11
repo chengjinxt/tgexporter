@@ -13,3 +13,6 @@ def test_article_and_media_filenames_share_prefix():
         == "20260701_001_PIC_002_OpenClaw 原生移动端上线 iOS 与 Android.jpg"
     )
 
+
+def test_sanitize_title_falls_back_for_corrupt_question_marks():
+    assert sanitize_title("？？？？？？？？ ？？ “？？“12 ？？？？") == "未命名文章"

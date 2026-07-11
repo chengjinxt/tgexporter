@@ -27,6 +27,8 @@ REPLACEMENTS = {
 
 def sanitize_title(title: str, max_length: int = 90) -> str:
     value = title.strip()
+    if looks_corrupt(value):
+        value = "未命名文章"
     for old, new in REPLACEMENTS.items():
         value = value.replace(old, new)
     value = re.sub(r"[\r\n\t]+", " ", value)
@@ -38,6 +40,16 @@ def sanitize_title(title: str, max_length: int = 90) -> str:
     if len(value) > max_length:
         value = value[:max_length].rstrip(" .")
     return value
+
+
+def looks_corrupt(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    question_count = stripped.count("?") + stripped.count("？")
+    if question_count < 4:
+        return False
+    return question_count / max(len(stripped), 1) >= 0.25
 
 
 def article_filename(date_key: str, daily_index: int, title: str) -> str:
@@ -91,4 +103,3 @@ def extension_from_mime(mime_type: str | None, fallback: str = ".bin") -> str:
         "video/webm": ".webm",
     }
     return known.get(mime_type.lower(), fallback)
-
