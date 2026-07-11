@@ -1,4 +1,13 @@
-from tgexporter.wechat_publisher import build_wechat_body_items, markdown_to_wechat_html, parse_markdown_article
+import pytest
+
+from tgexporter.cli import build_parser
+from tgexporter.wechat_publisher import (
+    build_wechat_body_items,
+    clean_wechat_title,
+    markdown_to_wechat_html,
+    parse_markdown_article,
+    validate_wechat_article_count,
+)
 
 
 def test_wechat_preview_converts_markdown_assets(tmp_path):
@@ -98,3 +107,26 @@ title: "多图文章"
     assert items[1][1] == first
     assert items[3][1] == second
     assert "多图文章" not in str(items[0][1])
+
+
+def test_wechat_publish_accepts_multiple_article_paths():
+    args = build_parser().parse_args(["publish-wechat", "--article", "main.md", "sub.md", "--auto-fill"])
+
+    assert [path.name for path in args.article] == ["main.md", "sub.md"]
+    assert args.auto_fill is True
+
+
+def test_wechat_article_count_limit():
+    validate_wechat_article_count([object()] * 8)
+
+    with pytest.raises(ValueError, match="at most 8"):
+        validate_wechat_article_count([object()] * 9)
+
+
+def test_clean_wechat_title_removes_icon_characters():
+    assert clean_wechat_title("📱 华为 5G 旗舰重返海外，新机实测峰值速率突破 1100 Mbps") == (
+        "华为 5G 旗舰重返海外，新机实测峰值速率突破 1100 Mbps"
+    )
+    assert clean_wechat_title("顶尖 AI 企业安全评级普遍偏低 榜首 Anthropic 仅获 C+") == (
+        "顶尖 AI 企业安全评级普遍偏低 榜首 Anthropic 仅获 C+"
+    )

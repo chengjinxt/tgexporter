@@ -13,6 +13,7 @@ from .wechat_publisher import WechatPublisher
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -23,6 +24,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+
+
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,8 +59,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=int, default=None, help="Bot API long-poll timeout seconds.")
     run.set_defaults(func=cmd_run)
 
-    publish = subparsers.add_parser("publish-wechat", help="Open WeChat assisted draft flow for one Markdown article.")
-    publish.add_argument("--article", type=Path, required=True, help="Markdown article path.")
+    publish = subparsers.add_parser("publish-wechat", help="Open WeChat assisted draft flow for Markdown articles.")
+    publish.add_argument(
+        "--article",
+        type=Path,
+        nargs="+",
+        required=True,
+        help="Markdown article path(s). The first path is the main WeChat article; the rest are sub-articles.",
+    )
     publish.add_argument("--auto-fill", action="store_true", help="Try filling WeChat editor automatically.")
     publish.add_argument("--no-playwright", action="store_true", help="Use default browser instead of Playwright.")
     publish.add_argument("--headless", action="store_true", help="Run Playwright headless.")
@@ -133,17 +146,17 @@ def cmd_run(args) -> int:
 def cmd_publish_wechat(args) -> int:
     config = load_config(args.root)
     publisher = WechatPublisher(config.wechat.profile_dir)
-    article = args.article.resolve()
+    articles = [article.resolve() for article in args.article]
     if args.auto_fill:
-        preview = publisher.try_auto_fill(
-            article,
+        preview = publisher.try_auto_fill_many(
+            articles,
             headless=args.headless,
             login_timeout_seconds=args.login_timeout,
             review_timeout_seconds=args.review_timeout,
         )
     else:
         preview = publisher.open_assisted(
-            article,
+            articles[0],
             use_playwright=not args.no_playwright,
             headless=args.headless,
         )
