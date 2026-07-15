@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor = subparsers.add_parser("doctor", help="Check local config and Telegram bot token.")
+    add_channel_argument(doctor)
     doctor.set_defaults(func=cmd_doctor)
 
     stats = subparsers.add_parser("stats-domains", help="Show source domain statistics from rendered articles.")
@@ -45,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     stats.set_defaults(func=cmd_stats_domains)
 
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
+    add_channel_argument(listen)
     listen.add_argument("--once", action="store_true", help="Poll once and exit.")
     listen.add_argument("--latest-only", action="store_true", help="Process only the newest pending update.")
     listen.add_argument("--drop-pending", action="store_true", help="Mark current pending updates as consumed without rendering.")
@@ -52,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     listen.set_defaults(func=cmd_listen)
 
     run = subparsers.add_parser("run", help="Listen and optionally open WeChat draft helper.")
+    add_channel_argument(run)
     run.add_argument("--once", action="store_true", help="Poll once and exit.")
     run.add_argument("--latest-only", action="store_true", help="Process only the newest pending update.")
     run.add_argument("--drop-pending", action="store_true", help="Mark current pending updates as consumed without rendering.")
@@ -77,14 +80,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_channel_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--channel", default=None, help="Telegram channel username. Overrides TG_CHANNEL for this run.")
+
+
 def cmd_doctor(args) -> int:
     config = load_config(args.root)
+    channel = args.channel or config.telegram.channel
     require_bot_token(config)
     client = TelegramBotClient(config.telegram.bot_token, proxy_url=config.telegram.proxy_url)
     me = client.get_me()
     print(f"Bot: @{me.get('username')} ({me.get('first_name')})")
     print(f"Token: {mask_secret(config.telegram.bot_token)}")
-    print(f"Channel: @{config.telegram.channel.lstrip('@')}")
+    print(f"Channel: @{channel.lstrip('@')}")
     print(f"Proxy: {config.telegram.proxy_url or 'direct'}")
     print(f"Output: {config.output.base_dir}")
     print(f"WeChat profile: {config.wechat.profile_dir}")
@@ -92,7 +100,7 @@ def cmd_doctor(args) -> int:
 
 
 def cmd_listen(args) -> int:
-    collector, config = build_collector(args.root)
+    collector, config = build_collector(args.root, channel_override=args.channel)
     timeout = args.timeout or config.telegram.poll_timeout_seconds
     if args.drop_pending:
         count = collector.drop_pending(timeout=1)
@@ -118,7 +126,7 @@ def cmd_stats_domains(args) -> int:
 
 
 def cmd_run(args) -> int:
-    collector, config = build_collector(args.root)
+    collector, config = build_collector(args.root, channel_override=args.channel)
     timeout = args.timeout or config.telegram.poll_timeout_seconds
     publisher = WechatPublisher(config.wechat.profile_dir) if args.draft else None
     if args.drop_pending:
@@ -164,7 +172,7 @@ def cmd_publish_wechat(args) -> int:
     return 0
 
 
-def build_collector(root: Path) -> tuple[TelegramCollector, object]:
+def build_collector(root: Path, channel_override: str | None = None) -> tuple[TelegramCollector, object]:
     config = load_config(root)
     require_bot_token(config)
     state = StateStore(root / "data" / "state.sqlite")
@@ -174,7 +182,7 @@ def build_collector(root: Path) -> tuple[TelegramCollector, object]:
         client=client,
         state=state,
         renderer=renderer,
-        channel=config.telegram.channel,
+        channel=channel_override or config.telegram.channel,
         timezone=config.output.timezone,
         proxy_url=config.telegram.proxy_url,
     )

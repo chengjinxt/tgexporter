@@ -116,6 +116,13 @@ def test_wechat_publish_accepts_multiple_article_paths():
     assert args.auto_fill is True
 
 
+def test_listen_accepts_channel_override():
+    args = build_parser().parse_args(["listen", "--channel", "TechnologyNewsSyncAssistant", "--once"])
+
+    assert args.channel == "TechnologyNewsSyncAssistant"
+    assert args.once is True
+
+
 def test_wechat_article_count_limit():
     validate_wechat_article_count([object()] * 8)
 
