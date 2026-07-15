@@ -6,9 +6,11 @@ from tgexporter.collector import (
     clean_article_text,
     collect_entity_links,
     collect_entity_urls,
+    is_transient_telegram_error,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.state import StateStore
+from tgexporter.telegram_bot import TelegramBotError
 
 
 class FakeBotClient:
@@ -135,3 +137,17 @@ BleepingComputer
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
+
+
+def test_transient_telegram_error_detects_ssl_timeout():
+    error = TelegramBotError(
+        "Telegram API getUpdates failed: <urlopen error _ssl.c:983: The handshake operation timed out>"
+    )
+
+    assert is_transient_telegram_error(error)
+
+
+def test_transient_telegram_error_does_not_retry_invalid_token():
+    error = TelegramBotError("Telegram API getUpdates failed: Unauthorized: invalid token")
+
+    assert not is_transient_telegram_error(error)

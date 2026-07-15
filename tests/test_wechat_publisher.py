@@ -1,6 +1,6 @@
 import pytest
 
-from tgexporter.cli import build_parser
+from tgexporter.cli import build_parser, resolve_publish_articles
 from tgexporter.wechat_publisher import (
     build_wechat_body_items,
     clean_wechat_title,
@@ -114,6 +114,25 @@ def test_wechat_publish_accepts_multiple_article_paths():
 
     assert [path.name for path in args.article] == ["main.md", "sub.md"]
     assert args.auto_fill is True
+
+
+def test_wechat_publish_accepts_article_dir(tmp_path):
+    second = tmp_path / "002-second.md"
+    first = tmp_path / "001-first.md"
+    ignored = tmp_path / "cover.jpg"
+    second.write_text("# second", encoding="utf-8")
+    first.write_text("# first", encoding="utf-8")
+    ignored.write_bytes(b"img")
+    args = build_parser().parse_args(["publish-wechat", "--article-dir", str(tmp_path), "--auto-fill"])
+
+    articles = resolve_publish_articles(args.article, args.article_dir)
+
+    assert [path.name for path in articles] == ["001-first.md", "002-second.md"]
+
+
+def test_wechat_publish_rejects_article_and_article_dir_together(tmp_path):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["publish-wechat", "--article", "main.md", "--article-dir", str(tmp_path)])
 
 
 def test_listen_accepts_channel_override():

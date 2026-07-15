@@ -63,12 +63,17 @@ def build_parser() -> argparse.ArgumentParser:
     run.set_defaults(func=cmd_run)
 
     publish = subparsers.add_parser("publish-wechat", help="Open WeChat assisted draft flow for Markdown articles.")
-    publish.add_argument(
+    publish_source = publish.add_mutually_exclusive_group(required=True)
+    publish_source.add_argument(
         "--article",
         type=Path,
         nargs="+",
-        required=True,
         help="Markdown article path(s). The first path is the main WeChat article; the rest are sub-articles.",
+    )
+    publish_source.add_argument(
+        "--article-dir",
+        type=Path,
+        help="Directory containing Markdown articles. Files are published in filename order.",
     )
     publish.add_argument("--auto-fill", action="store_true", help="Try filling WeChat editor automatically.")
     publish.add_argument("--no-playwright", action="store_true", help="Use default browser instead of Playwright.")
@@ -154,7 +159,7 @@ def cmd_run(args) -> int:
 def cmd_publish_wechat(args) -> int:
     config = load_config(args.root)
     publisher = WechatPublisher(config.wechat.profile_dir)
-    articles = [article.resolve() for article in args.article]
+    articles = resolve_publish_articles(args.article, args.article_dir)
     if args.auto_fill:
         preview = publisher.try_auto_fill_many(
             articles,
@@ -170,6 +175,20 @@ def cmd_publish_wechat(args) -> int:
         )
     print(f"WeChat preview: {preview}")
     return 0
+
+
+def resolve_publish_articles(article_paths: list[Path] | None, article_dir: Path | None) -> list[Path]:
+    if article_dir is not None:
+        directory = article_dir.resolve()
+        if not directory.exists():
+            raise RuntimeError(f"Article directory does not exist: {directory}")
+        if not directory.is_dir():
+            raise RuntimeError(f"Article directory is not a directory: {directory}")
+        articles = sorted(path.resolve() for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".md")
+        if not articles:
+            raise RuntimeError(f"No Markdown articles found in directory: {directory}")
+        return articles
+    return [article.resolve() for article in article_paths or []]
 
 
 def build_collector(root: Path, channel_override: str | None = None) -> tuple[TelegramCollector, object]:

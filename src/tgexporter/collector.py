@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -74,8 +75,19 @@ class TelegramCollector:
         return len(updates)
 
     def listen_forever(self, timeout: int = 30, on_article=None) -> None:
+        consecutive_errors = 0
         while True:
-            paths = self.poll_once(timeout=timeout)
+            try:
+                paths = self.poll_once(timeout=timeout)
+                consecutive_errors = 0
+            except TelegramBotError as exc:
+                if not is_transient_telegram_error(exc):
+                    raise
+                consecutive_errors += 1
+                delay = min(60, 5 * consecutive_errors)
+                print(f"Telegram getUpdates transient error: {exc}. Retry in {delay}s.", file=sys.stderr)
+                time.sleep(delay)
+                continue
             for path in paths:
                 if on_article:
                     on_article(path)
@@ -580,3 +592,32 @@ def download_web_file(url: str, destination: Path, proxy_url: str | None = None)
         return True
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False
+
+
+def is_transient_telegram_error(exc: TelegramBotError) -> bool:
+    text = str(exc).lower()
+    transient_markers = [
+        "timed out",
+        "timeout",
+        "urlopen error",
+        "ssl",
+        "handshake",
+        "connection reset",
+        "connection aborted",
+        "connection refused",
+        "remote end closed",
+        "temporarily unavailable",
+        "service unavailable",
+        "gateway timeout",
+        "bad gateway",
+        "too many requests",
+    ]
+    permanent_markers = [
+        "unauthorized",
+        "not found",
+        "invalid token",
+        "forbidden",
+    ]
+    return any(marker in text for marker in transient_markers) and not any(
+        marker in text for marker in permanent_markers
+    )
