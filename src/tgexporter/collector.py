@@ -27,6 +27,7 @@ from .models import ArticleDraft, MediaAsset
 from .placeholder_image import write_placeholder_png
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
+from .text_filters import is_channel_promo_line, normalize_text
 from .video_cover import create_video_cover
 
 BOT_API_DOWNLOAD_LIMIT = 20_000_000
@@ -437,14 +438,6 @@ def clean_article_text(text: str, title: str, reference_names: list[str]) -> str
     while lines and lines[-1] == "":
         lines.pop()
     return "\n".join(lines)
-
-
-def normalize_text(value: str) -> str:
-    return re.sub(r"\s+", "", value).strip().lower()
-
-
-def is_channel_promo_line(line: str) -> bool:
-    return any(marker in line for marker in ("在花频道", "茶馆水群", "投稿通道"))
 
 
 def select_latest_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:

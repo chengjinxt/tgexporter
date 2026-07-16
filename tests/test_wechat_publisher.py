@@ -55,6 +55,8 @@ title: "字节跳动发布 Seedream 5.0 Pro，支持多语言生成与精准编�
 
 正文内容
 
+📢 频道 👥 群组 📝 投稿
+
 视频：[clip.mp4](clip.mp4)
 """,
         encoding="utf-8",
@@ -73,6 +75,9 @@ title: "字节跳动发布 Seedream 5.0 Pro，支持多语言生成与精准编�
     assert "<img" not in html
     assert "<video" not in html
     assert "clip.mp4" not in html
+    assert "频道" not in html
+    assert "群组" not in html
+    assert "投稿" not in html
     assert "正文内容" in html
 
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .filename import sanitize_title
+from .text_filters import is_channel_promo_line
 
 
 WECHAT_HOME_URL = "https://mp.weixin.qq.com/"
@@ -232,6 +233,9 @@ def markdown_to_wechat_html(
     for raw_line in article.body_markdown.splitlines():
         line = raw_line.rstrip()
         if not line:
+            flush_paragraph()
+            continue
+        if is_channel_promo_line(line):
             flush_paragraph()
             continue
         image = re.match(r"!\[(?P<alt>.*?)\]\((?P<src>.*?)\)", line)
@@ -681,6 +685,9 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
     for raw_line in article.body_markdown.splitlines():
         line = raw_line.rstrip()
         if not line:
+            flush_paragraph()
+            continue
+        if is_channel_promo_line(line):
             flush_paragraph()
             continue
 

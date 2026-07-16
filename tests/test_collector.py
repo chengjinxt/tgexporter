@@ -134,6 +134,8 @@ def test_clean_article_text_removes_title_reference_and_channel_promo():
 BleepingComputer
 
 🌸 在花频道 · 茶馆水群 · 投稿通道
+
+📢 频道 👥 群组 📝 投稿
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
