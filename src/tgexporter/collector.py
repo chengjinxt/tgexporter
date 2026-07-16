@@ -126,6 +126,8 @@ class TelegramCollector:
         try:
             return self._process_message_group(messages)
         except Exception as exc:
+            if is_internal_processing_error(exc):
+                raise
             message_ids = [str(item.get("message_id", "?")) for item in messages]
             print(f"Skipped Telegram message(s) {', '.join(message_ids)}: {exc}", file=sys.stderr)
             return None
@@ -255,7 +257,7 @@ class TelegramCollector:
                 article.date_key,
                 article.daily_index,
                 "PIC",
-                len(assets) + 1,
+                1,
                 article.title,
                 extension,
             )
@@ -614,3 +616,7 @@ def is_transient_telegram_error(exc: TelegramBotError) -> bool:
     return any(marker in text for marker in transient_markers) and not any(
         marker in text for marker in permanent_markers
     )
+
+
+def is_internal_processing_error(exc: Exception) -> bool:
+    return isinstance(exc, (AssertionError, AttributeError, NameError, TypeError, UnboundLocalError))

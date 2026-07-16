@@ -1,5 +1,9 @@
 from pathlib import Path
+from datetime import UTC, datetime
 
+import pytest
+
+from tgexporter import collector as collector_module
 from tgexporter.collector import (
     TelegramCollector,
     choose_video_variant,
@@ -9,6 +13,7 @@ from tgexporter.collector import (
     is_transient_telegram_error,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
+from tgexporter.models import ArticleDraft, LinkRef
 from tgexporter.state import StateStore
 from tgexporter.telegram_bot import TelegramBotError
 
@@ -139,6 +144,58 @@ BleepingComputer
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
+
+
+def test_download_link_images_uses_first_picture_index(tmp_path: Path, monkeypatch):
+    def fake_download(url, destination, proxy_url=None):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"image")
+        return True
+
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 16, tzinfo=UTC),
+        date_key="20260716",
+        daily_index=7,
+        title="链接配图文章",
+        text="正文",
+        links=[LinkRef(name="Example", url="https://example.com/a", image_url="https://example.com/cover.jpg")],
+    )
+    date_dir = tmp_path / "发布内容" / "20260716"
+
+    assets = collector._download_link_images(article, date_dir)
+
+    assert len(assets) == 1
+    assert assets[0].filename == "20260716_007_PIC_001_链接配图文章.jpg"
+    assert assets[0].path.exists()
+
+
+def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+
+    def broken_process(messages):
+        raise NameError("assets is not defined")
+
+    monkeypatch.setattr(collector, "_process_message_group", broken_process)
+
+    with pytest.raises(NameError):
+        collector._process_group_safely([{"message_id": 183}])
 
 
 def test_transient_telegram_error_detects_ssl_timeout():
