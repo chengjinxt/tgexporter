@@ -10,6 +10,7 @@ from tgexporter.collector import (
     clean_article_text,
     collect_entity_links,
     collect_entity_urls,
+    collect_text,
     is_transient_telegram_error,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
@@ -131,6 +132,24 @@ def test_collect_entity_urls_reads_hidden_text_links():
     assert [item.name for item in collect_entity_links(messages)] == ["Example", "News"]
 
 
+def test_collect_text_keeps_wechat_hidden_link_as_markdown_link():
+    messages = [
+        {
+            "text": "据 长安街知事 报道",
+            "entities": [
+                {
+                    "type": "text_link",
+                    "offset": 2,
+                    "length": 5,
+                    "url": "https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw",
+                }
+            ],
+        }
+    ]
+
+    assert collect_text(messages) == "据 [长安街知事](https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw) 报道"
+
+
 def test_clean_article_text_removes_title_reference_and_channel_promo():
     text = """测试标题
 
@@ -147,7 +166,7 @@ BleepingComputer
 
 
 def test_download_link_images_uses_first_picture_index(tmp_path: Path, monkeypatch):
-    def fake_download(url, destination, proxy_url=None):
+    def fake_download(url, destination, proxy_url=None, referer=None):
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         Path(destination).write_bytes(b"image")
         return True
@@ -179,6 +198,55 @@ def test_download_link_images_uses_first_picture_index(tmp_path: Path, monkeypat
     assert len(assets) == 1
     assert assets[0].filename == "20260716_007_PIC_001_链接配图文章.jpg"
     assert assets[0].path.exists()
+
+
+def test_download_link_images_tries_next_candidate_when_first_is_unsuitable(tmp_path: Path, monkeypatch):
+    referers: list[str | None] = []
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        referers.append(referer)
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"good" if "article" in url else b"bad")
+        return True
+
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: Path(path).read_bytes() == b"good")
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 16, tzinfo=UTC),
+        date_key="20260716",
+        daily_index=8,
+        title="链接多候选配图文章",
+        text="正文",
+        links=[
+            LinkRef(
+                name="QbitAI",
+                url="https://www.qbitai.com/2026/07/447873.html",
+                image_url="https://www.qbitai.com/logo.png",
+                image_urls=("https://www.qbitai.com/logo.png", "https://i.qbitai.com/article.png"),
+            )
+        ],
+    )
+    date_dir = tmp_path / "发布内容" / "20260716"
+
+    assets = collector._download_link_images(article, date_dir)
+
+    assert len(assets) == 1
+    assert assets[0].filename == "20260716_008_PIC_001_链接多候选配图文章.png"
+    assert assets[0].path.read_bytes() == b"good"
+    assert referers == [
+        "https://www.qbitai.com/2026/07/447873.html",
+        "https://www.qbitai.com/2026/07/447873.html",
+    ]
 
 
 def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):

@@ -3,6 +3,9 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+LOW_DETAIL_EDGE_THRESHOLD = 3.5
+LOW_DETAIL_UNIQUE_GRAY_LEVELS = 16
+
 
 def is_suitable_article_image(path: Path) -> bool:
     size = read_image_size(path)
@@ -16,7 +19,48 @@ def is_suitable_article_image(path: Path) -> bool:
     aspect = width / height
     if 0.8 <= aspect <= 1.25 and width * height < 500_000:
         return False
+    if is_low_information_image(path):
+        return False
     return True
+
+
+def is_low_information_image(path: Path) -> bool:
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+
+    try:
+        with Image.open(path) as image:
+            image = image.convert("RGB")
+            image.thumbnail((96, 96))
+            gray = image.convert("L")
+            width, height = gray.size
+            pixels = list(gray.getdata())
+    except OSError:
+        return False
+
+    if not pixels or len(set(pixels)) < LOW_DETAIL_UNIQUE_GRAY_LEVELS:
+        return True
+    if width < 2 and height < 2:
+        return True
+
+    total_delta = 0
+    comparisons = 0
+    for y in range(height):
+        row_offset = y * width
+        for x in range(width):
+            current = pixels[row_offset + x]
+            if x + 1 < width:
+                total_delta += abs(current - pixels[row_offset + x + 1])
+                comparisons += 1
+            if y + 1 < height:
+                total_delta += abs(current - pixels[row_offset + width + x])
+                comparisons += 1
+
+    if not comparisons:
+        return True
+    return (total_delta / comparisons) < LOW_DETAIL_EDGE_THRESHOLD
 
 
 def read_image_size(path: Path) -> tuple[int, int] | None:
@@ -69,4 +113,3 @@ def read_jpeg_size(file) -> tuple[int, int] | None:
             height, width = struct.unpack(">HH", data[1:5])
             return width, height
         file.seek(length - 2, 1)
-

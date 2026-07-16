@@ -114,6 +114,28 @@ title: "多图文章"
     assert "多图文章" not in str(items[0][1])
 
 
+def test_wechat_markdown_links_render_as_clickable_anchors(tmp_path):
+    article_path = tmp_path / "article.md"
+    article_path.write_text(
+        """---
+title: "公众号链接文章"
+---
+
+# 公众号链接文章
+
+据 [长安街知事](https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw) 报道，正文内容。
+""",
+        encoding="utf-8",
+    )
+
+    article = parse_markdown_article(article_path)
+    html = markdown_to_wechat_html(article, include_title=False)
+    items = build_wechat_body_items(article)
+
+    assert '<a href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw">长安街知事</a>' in html
+    assert '<a href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw">长安街知事</a>' in str(items[0][1])
+
+
 def test_wechat_publish_accepts_multiple_article_paths():
     args = build_parser().parse_args(["publish-wechat", "--article", "main.md", "sub.md", "--auto-fill"])
 

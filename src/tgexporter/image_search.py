@@ -11,6 +11,16 @@ GOOGLE_IMAGE_RE = re.compile(r"https://encrypted-tbn\d\.gstatic\.com/images\?q=t
 
 
 def find_google_image_url(query: str, proxy_url: str | None = None, timeout: int = 12) -> str | None:
+    urls = find_google_image_urls(query, proxy_url=proxy_url, timeout=timeout, limit=1)
+    return urls[0] if urls else None
+
+
+def find_google_image_urls(
+    query: str,
+    proxy_url: str | None = None,
+    timeout: int = 12,
+    limit: int = 8,
+) -> list[str]:
     search_url = "https://www.google.com/search?" + urllib.parse.urlencode(
         {"tbm": "isch", "q": query, "hl": "zh-CN"}
     )
@@ -25,8 +35,12 @@ def find_google_image_url(query: str, proxy_url: str | None = None, timeout: int
         with build_opener(proxy_url).open(request, timeout=timeout) as response:
             text = response.read(512_000).decode("utf-8", errors="ignore")
     except OSError:
-        return None
+        return []
+    urls: list[str] = []
     for match in GOOGLE_IMAGE_RE.finditer(text):
-        return html.unescape(match.group(0))
-    return None
-
+        url = html.unescape(match.group(0))
+        if url not in urls:
+            urls.append(url)
+        if len(urls) >= limit:
+            break
+    return urls

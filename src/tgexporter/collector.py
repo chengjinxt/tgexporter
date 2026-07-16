@@ -19,11 +19,11 @@ from .filename import (
     media_filename,
     sanitize_title,
 )
-from .image_search import find_google_image_url
+from .image_search import find_google_image_urls
 from .image_filter import is_suitable_article_image
-from .link_enricher import ExtraLink, enrich_links
+from .link_enricher import ExtraLink, enrich_links, is_wechat_article_url
 from .markdown_renderer import MarkdownRenderer
-from .models import ArticleDraft, MediaAsset
+from .models import ArticleDraft, LinkRef, MediaAsset
 from .placeholder_image import write_placeholder_png
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
@@ -249,20 +249,48 @@ class TelegramCollector:
     def _download_link_images(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         seen: set[str] = set()
         for link in article.links:
-            if not link.image_url or link.image_url in seen:
-                continue
-            seen.add(link.image_url)
-            extension = extension_from_url(link.image_url, ".jpg")
+            for image_url in link_image_candidates(link):
+                if image_url in seen:
+                    continue
+                seen.add(image_url)
+                extension = extension_from_url(image_url, ".jpg")
+                filename = media_filename(
+                    article.date_key,
+                    article.daily_index,
+                    "PIC",
+                    1,
+                    article.title,
+                    extension,
+                )
+                destination = date_dir / filename
+                if not download_web_file(image_url, destination, proxy_url=self.proxy_url, referer=link.url):
+                    continue
+                if not is_suitable_article_image(destination):
+                    destination.unlink(missing_ok=True)
+                    continue
+                return [
+                    MediaAsset(
+                        kind="image",
+                        filename=filename,
+                        path=destination,
+                        source="web_og_image",
+                        title=link.name,
+                    )
+                ]
+        return []
+
+    def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        for image_url in find_google_image_urls(article.title, proxy_url=self.proxy_url):
             filename = media_filename(
                 article.date_key,
                 article.daily_index,
                 "PIC",
                 1,
                 article.title,
-                extension,
+                extension_from_url(image_url, ".jpg"),
             )
             destination = date_dir / filename
-            if not download_web_file(link.image_url, destination, proxy_url=self.proxy_url):
+            if not download_web_file(image_url, destination, proxy_url=self.proxy_url):
                 continue
             if not is_suitable_article_image(destination):
                 destination.unlink(missing_ok=True)
@@ -272,39 +300,11 @@ class TelegramCollector:
                     kind="image",
                     filename=filename,
                     path=destination,
-                    source="web_og_image",
-                    title=link.name,
+                    source="google_image_search",
+                    title=f"Google 图片搜索：{article.title}",
                 )
             ]
         return []
-
-    def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
-        image_url = find_google_image_url(article.title, proxy_url=self.proxy_url)
-        if not image_url:
-            return []
-        filename = media_filename(
-            article.date_key,
-            article.daily_index,
-            "PIC",
-            1,
-            article.title,
-            extension_from_url(image_url, ".jpg"),
-        )
-        destination = date_dir / filename
-        if not download_web_file(image_url, destination, proxy_url=self.proxy_url):
-            return []
-        if not is_suitable_article_image(destination):
-            destination.unlink(missing_ok=True)
-            return []
-        return [
-            MediaAsset(
-                kind="image",
-                filename=filename,
-                path=destination,
-                source="google_image_search",
-                title=f"Google 图片搜索：{article.title}",
-            )
-        ]
 
     def _create_placeholder_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")
@@ -369,11 +369,44 @@ def normalize_channel(channel: str) -> str:
 def collect_text(messages: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for message in messages:
-        value = message.get("text") or message.get("caption") or ""
+        value = render_message_text(message)
         value = value.strip()
         if value and value not in parts:
             parts.append(value)
     return "\n\n".join(parts)
+
+
+def render_message_text(message: dict[str, Any]) -> str:
+    if message.get("text"):
+        return apply_wechat_markdown_links(message.get("text") or "", message.get("entities") or [])
+    return apply_wechat_markdown_links(message.get("caption") or "", message.get("caption_entities") or [])
+
+
+def apply_wechat_markdown_links(text: str, entities: list[dict[str, Any]]) -> str:
+    replacements: list[tuple[int, int, str]] = []
+    for entity in entities:
+        url = entity.get("url")
+        if not url or not is_wechat_article_url(url):
+            continue
+        if "offset" not in entity or "length" not in entity:
+            continue
+        start = utf16_index_to_py_index(text, int(entity["offset"]))
+        end = utf16_index_to_py_index(text, int(entity["offset"]) + int(entity["length"]))
+        label = text[start:end].strip()
+        if not label:
+            continue
+        replacements.append((start, end, f"[{label}]({url})"))
+    if not replacements:
+        return text
+
+    rendered = text
+    last_start = len(text) + 1
+    for start, end, value in sorted(replacements, reverse=True):
+        if end > last_start:
+            continue
+        rendered = rendered[:start] + value + rendered[end:]
+        last_start = start
+    return rendered
 
 
 def collect_entity_urls(messages: list[dict[str, Any]]) -> list[str]:
@@ -568,6 +601,16 @@ def choose_video_variant(video: dict[str, Any]) -> dict[str, Any]:
     return min(variants, key=lambda item: int(item.get("file_size") or BOT_API_DOWNLOAD_LIMIT + 1))
 
 
+def link_image_candidates(link: LinkRef) -> list[str]:
+    candidates: list[str] = []
+    if link.image_url:
+        candidates.append(link.image_url)
+    for image_url in link.image_urls:
+        if image_url not in candidates:
+            candidates.append(image_url)
+    return candidates
+
+
 def extension_from_url(url: str, fallback: str) -> str:
     suffix = Path(urllib.parse.urlparse(url).path).suffix
     if suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
@@ -575,8 +618,11 @@ def extension_from_url(url: str, fallback: str) -> str:
     return fallback
 
 
-def download_web_file(url: str, destination: Path, proxy_url: str | None = None) -> bool:
-    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 tgexporter/0.1"})
+def download_web_file(url: str, destination: Path, proxy_url: str | None = None, referer: str | None = None) -> bool:
+    headers = {"User-Agent": "Mozilla/5.0 tgexporter/0.1"}
+    if referer:
+        headers["Referer"] = referer
+    request = urllib.request.Request(url, headers=headers)
     try:
         from .link_enricher import build_opener
 

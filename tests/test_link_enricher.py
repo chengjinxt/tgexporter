@@ -1,4 +1,4 @@
-from tgexporter.link_enricher import enrich_links, extract_urls
+from tgexporter.link_enricher import enrich_links, extract_urls, find_page_image_urls, is_wechat_article_url
 
 
 def test_extract_urls_strips_chinese_sentence_punctuation():
@@ -28,3 +28,21 @@ def test_enrich_links_ignores_telegram_promo_domains():
         fetch_metadata=False,
     )
     assert [link.url for link in links] == ["https://example.com/a"]
+
+
+def test_wechat_article_url_is_separate_from_source_links():
+    assert is_wechat_article_url("https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw")
+    assert not is_wechat_article_url("https://example.com/s/a")
+
+
+def test_find_page_image_urls_skips_logo_qrcode_and_keeps_article_images():
+    html = """
+    <meta property="og:image" content="https://www.qbitai.com/wp-content/uploads/imgs/qbitai-logo-1.png">
+    <img src="/wp-content/uploads/2019/01/qrcode_QbitAI_1.jpg">
+    <img src="http://www.qbitai.com/wp-content/themes/liangziwei/imagesnew/head.jpg">
+    <img src="https://i.qbitai.com/wp-content/uploads/2026/07/a429490b5ed4bf0189b5e4e2701f7330.png">
+    """
+
+    assert find_page_image_urls(html, "https://www.qbitai.com/2026/07/447873.html") == (
+        "https://i.qbitai.com/wp-content/uploads/2026/07/a429490b5ed4bf0189b5e4e2701f7330.png",
+    )

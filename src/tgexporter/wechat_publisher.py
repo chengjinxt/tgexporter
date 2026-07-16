@@ -20,6 +20,7 @@ WECHAT_HOME_URL = "https://mp.weixin.qq.com/"
 WECHAT_EDITOR_URL = "https://mp.weixin.qq.com/cgi-bin/appmsg"
 MAX_WECHAT_ARTICLES = 8
 DEFAULT_HUMAN_PAUSE_MS = (900, 1800)
+MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)\s]+)\)")
 
 
 @dataclass(frozen=True)
@@ -264,15 +265,15 @@ def markdown_to_wechat_html(
             continue
         if line.startswith("## "):
             flush_paragraph()
-            blocks.append(f"<h2>{html.escape(line[3:].strip())}</h2>")
+            blocks.append(f"<h2>{markdown_inline_to_html(line[3:].strip())}</h2>")
             continue
         if line.startswith("- "):
             flush_paragraph()
-            blocks.append(f"<p>{html.escape(line[2:].strip())}</p>")
+            blocks.append(f"<p>{markdown_inline_to_html(line[2:].strip())}</p>")
             continue
         if skip_duplicate_intro and is_duplicate_title(line, article.title):
             continue
-        paragraph.append(html.escape(line))
+        paragraph.append(markdown_inline_to_html(line))
 
     flush_paragraph()
     return "\n".join(blocks)
@@ -298,6 +299,19 @@ def clean_wechat_title(title: str) -> str:
         cleaned.append(char)
     value = re.sub(r"\s+", " ", "".join(cleaned)).strip()
     return value or title.strip()
+
+
+def markdown_inline_to_html(value: str) -> str:
+    parts: list[str] = []
+    last = 0
+    for match in MARKDOWN_LINK_RE.finditer(value):
+        parts.append(html.escape(value[last : match.start()]))
+        label = html.escape(match.group("label").strip())
+        url = html.escape(match.group("url").strip(), quote=True)
+        parts.append(f'<a href="{url}">{label}</a>')
+        last = match.end()
+    parts.append(html.escape(value[last:]))
+    return "".join(parts)
 
 
 def resolve_markdown_asset(base_dir: Path, value: str) -> str:
@@ -712,15 +726,15 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
             continue
         if line.startswith("## "):
             flush_paragraph()
-            items.append(("html", f"<h2>{html.escape(line[3:].strip())}</h2>"))
+            items.append(("html", f"<h2>{markdown_inline_to_html(line[3:].strip())}</h2>"))
             continue
         if line.startswith("- "):
             flush_paragraph()
-            items.append(("html", f"<p>{html.escape(line[2:].strip())}</p>"))
+            items.append(("html", f"<p>{markdown_inline_to_html(line[2:].strip())}</p>"))
             continue
         if is_duplicate_title(line, article.title):
             continue
-        paragraph.append(html.escape(line))
+        paragraph.append(markdown_inline_to_html(line))
 
     flush_paragraph()
     return items

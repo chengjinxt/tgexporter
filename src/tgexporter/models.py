@@ -10,6 +10,7 @@ class LinkRef:
     name: str
     url: str
     image_url: str | None = None
+    image_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -39,4 +40,3 @@ class ArticleDraft:
     @property
     def prefix(self) -> str:
         return f"{self.date_key}_{self.daily_index:03d}"
-
