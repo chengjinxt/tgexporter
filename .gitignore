@@ -8,3 +8,6 @@ __pycache__/
 .tmp/
 *.pyc
 *.egg-info/
+build/
+dist/
+tgexporter.exe

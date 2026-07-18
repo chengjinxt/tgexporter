@@ -1,6 +1,13 @@
 import pytest
 
-from tgexporter.cli import build_parser, resolve_publish_articles
+from tgexporter.cli import (
+    build_parser,
+    chunk_articles,
+    collect_markdown_local_assets,
+    move_published_batch,
+    next_batch_index,
+    resolve_publish_articles,
+)
 from tgexporter.wechat_publisher import (
     build_wechat_body_items,
     clean_wechat_title,
@@ -147,8 +154,12 @@ def test_wechat_publish_accepts_article_dir(tmp_path):
     second = tmp_path / "002-second.md"
     first = tmp_path / "001-first.md"
     ignored = tmp_path / "cover.jpg"
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    nested_article = nested / "000-nested.md"
     second.write_text("# second", encoding="utf-8")
     first.write_text("# first", encoding="utf-8")
+    nested_article.write_text("# nested", encoding="utf-8")
     ignored.write_bytes(b"img")
     args = build_parser().parse_args(["publish-wechat", "--article-dir", str(tmp_path), "--auto-fill"])
 
@@ -163,10 +174,61 @@ def test_wechat_publish_rejects_article_and_article_dir_together(tmp_path):
 
 
 def test_listen_accepts_channel_override():
-    args = build_parser().parse_args(["listen", "--channel", "TechnologyNewsSyncAssistant", "--once"])
+    args = build_parser().parse_args(
+        ["listen", "--channel", "TechnologyNewsSyncAssistant", "--save-dir", "E:/out", "--once"]
+    )
 
     assert args.channel == "TechnologyNewsSyncAssistant"
+    assert str(args.save_dir).replace("\\", "/") == "E:/out"
     assert args.once is True
+
+
+def test_chunk_articles_uses_wechat_batch_size(tmp_path):
+    articles = [tmp_path / f"{index:03d}.md" for index in range(17)]
+
+    batches = chunk_articles(articles, 8)
+
+    assert [len(batch) for batch in batches] == [8, 8, 1]
+
+
+def test_next_batch_index_skips_existing_batch_dirs(tmp_path):
+    (tmp_path / "第1批").mkdir()
+    (tmp_path / "第3批").mkdir()
+    (tmp_path / "草稿").mkdir()
+
+    assert next_batch_index(tmp_path) == 4
+
+
+def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_path):
+    image = tmp_path / "001_PIC_001.jpg"
+    video = tmp_path / "001_VID_001.mp4"
+    unused = tmp_path / "unused.jpg"
+    article = tmp_path / "001-title.md"
+    image.write_bytes(b"image")
+    video.write_bytes(b"video")
+    unused.write_bytes(b"unused")
+    article.write_text(
+        """# title
+
+![cover](001_PIC_001.jpg)
+
+视频：[clip](001_VID_001.mp4)
+
+[external](https://example.com/a)
+""",
+        encoding="utf-8",
+    )
+
+    assert collect_markdown_local_assets(article) == [image.resolve(), video.resolve()]
+
+    moved = move_published_batch([article], tmp_path / "第1批")
+
+    assert sorted(path.name for path in moved) == ["001-title.md", "001_PIC_001.jpg", "001_VID_001.mp4"]
+    assert not article.exists()
+    assert not image.exists()
+    assert not video.exists()
+    assert unused.exists()
+    assert (tmp_path / "第1批" / "001-title.md").exists()
 
 
 def test_wechat_article_count_limit():
