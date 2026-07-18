@@ -21,6 +21,7 @@ WECHAT_EDITOR_URL = "https://mp.weixin.qq.com/cgi-bin/appmsg"
 MAX_WECHAT_ARTICLES = 8
 DEFAULT_HUMAN_PAUSE_MS = (900, 1800)
 MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)\s]+)\)")
+URL_ONLY_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -231,7 +232,8 @@ def markdown_to_wechat_html(
             blocks.append(f"<p>{'<br>'.join(paragraph)}</p>")
             paragraph.clear()
 
-    for raw_line in article.body_markdown.splitlines():
+    lines = article.body_markdown.splitlines()
+    for index, raw_line in enumerate(lines):
         line = raw_line.rstrip()
         if not line:
             flush_paragraph()
@@ -271,7 +273,7 @@ def markdown_to_wechat_html(
             flush_paragraph()
             blocks.append(f"<p>{markdown_inline_to_html(line[2:].strip())}</p>")
             continue
-        if skip_duplicate_intro and is_duplicate_title(line, article.title):
+        if skip_duplicate_intro and not is_reference_label_line(lines, index) and is_duplicate_title(line, article.title):
             continue
         paragraph.append(markdown_inline_to_html(line))
 
@@ -286,7 +288,29 @@ def normalize_title_text(value: str) -> str:
 def is_duplicate_title(value: str, title: str) -> bool:
     left = normalize_title_text(value)
     right = normalize_title_text(title)
-    return bool(left and right and (left == right or left in right or right in left))
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if len(left) < 10:
+        return False
+    return left in right or right in left
+
+
+def is_reference_label_line(lines: list[str], index: int) -> bool:
+    line = lines[index].strip()
+    if not line or URL_ONLY_RE.match(line):
+        return False
+    if line.startswith(("# ", "## ", "- ", "![", "视频：")):
+        return False
+    if is_channel_promo_line(line):
+        return False
+    for next_line in lines[index + 1 :]:
+        stripped = next_line.strip()
+        if not stripped:
+            continue
+        return bool(URL_ONLY_RE.match(stripped))
+    return False
 
 
 def clean_wechat_title(title: str) -> str:
@@ -696,7 +720,8 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
             items.append(("html", f"<p>{'<br>'.join(paragraph)}</p>"))
             paragraph.clear()
 
-    for raw_line in article.body_markdown.splitlines():
+    lines = article.body_markdown.splitlines()
+    for index, raw_line in enumerate(lines):
         line = raw_line.rstrip()
         if not line:
             flush_paragraph()
@@ -732,7 +757,7 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
             flush_paragraph()
             items.append(("html", f"<p>{markdown_inline_to_html(line[2:].strip())}</p>"))
             continue
-        if is_duplicate_title(line, article.title):
+        if not is_reference_label_line(lines, index) and is_duplicate_title(line, article.title):
             continue
         paragraph.append(markdown_inline_to_html(line))
 

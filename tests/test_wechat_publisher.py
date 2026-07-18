@@ -89,6 +89,47 @@ title: "字节跳动发布 Seedream 5.0 Pro，支持多语言生成与精准编�
     assert "正文内容" in html
 
 
+def test_wechat_publish_body_keeps_reference_label_even_when_label_is_in_title(tmp_path):
+    image = tmp_path / "cover.jpg"
+    image.write_bytes(b"img")
+    article_path = tmp_path / "article.md"
+    article_path.write_text(
+        """---
+title: "OpenAI 发售 Codex Micro 智能体键盘，配备 13 个机械按钮"
+---
+
+# OpenAI 发售 Codex Micro 智能体键盘，配备 13 个机械按钮
+
+![Telegram图片](cover.jpg)
+
+OpenAI 与 Work Louder 联名推出 Codex Micro 实体控制器。
+
+OpenAI
+
+https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/
+""",
+        encoding="utf-8",
+    )
+
+    article = parse_markdown_article(article_path)
+    html = markdown_to_wechat_html(
+        article,
+        render_local_videos=False,
+        include_title=False,
+        skip_duplicate_intro=True,
+        include_images=False,
+    )
+    items = build_wechat_body_items(article)
+
+    assert "<p>OpenAI</p>" in html
+    assert "https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/" in html
+    assert any(item[0] == "html" and item[1] == "<p>OpenAI</p>" for item in items)
+    assert any(
+        item[0] == "html" and "https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/" in str(item[1])
+        for item in items
+    )
+
+
 def test_wechat_body_items_keep_multiple_local_images_in_order(tmp_path):
     first = tmp_path / "first.jpg"
     second = tmp_path / "second.jpg"
