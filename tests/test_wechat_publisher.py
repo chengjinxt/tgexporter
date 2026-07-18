@@ -1,5 +1,6 @@
 import pytest
 
+from tgexporter import cli as cli_module
 from tgexporter.cli import (
     build_parser,
     chunk_articles,
@@ -181,6 +182,21 @@ def test_listen_accepts_channel_override():
     assert args.channel == "TechnologyNewsSyncAssistant"
     assert str(args.save_dir).replace("\\", "/") == "E:/out"
     assert args.once is True
+
+
+def test_default_root_for_frozen_portable_prefers_project_root(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    portable = project / "dist" / "tgexporter-portable"
+    portable.mkdir(parents=True)
+    executable = portable / "tgexporter.exe"
+    executable.write_bytes(b"exe")
+    (project / ".env").write_text("TG_BOT_TOKEN=x", encoding="utf-8")
+
+    monkeypatch.chdir(portable)
+    monkeypatch.setattr(cli_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(cli_module.sys, "executable", str(executable))
+
+    assert cli_module.default_root() == project
 
 
 def test_chunk_articles_uses_wechat_batch_size(tmp_path):

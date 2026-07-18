@@ -38,7 +38,7 @@ def configure_stdio() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tgexporter")
-    parser.add_argument("--root", type=Path, default=Path.cwd(), help="Project root directory.")
+    parser.add_argument("--root", type=Path, default=default_root(), help="Project root directory.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor = subparsers.add_parser("doctor", help="Check local config and Telegram bot token.")
@@ -93,6 +93,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def add_channel_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--channel", default=None, help="Telegram channel username. Overrides TG_CHANNEL for this run.")
+
+
+def default_root() -> Path:
+    if not getattr(sys, "frozen", False):
+        return Path.cwd()
+    executable_dir = Path(sys.executable).resolve().parent
+    candidates = [
+        Path.cwd().resolve(),
+        executable_dir,
+        executable_dir.parent,
+        executable_dir.parent.parent,
+    ]
+    for candidate in candidates:
+        if any((candidate / name).exists() for name in (".env", "config.local.toml", "pyproject.toml")):
+            return candidate
+    return executable_dir
 
 
 def cmd_doctor(args) -> int:
