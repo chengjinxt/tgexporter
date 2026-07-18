@@ -28,10 +28,16 @@ class WechatConfig:
 
 
 @dataclass(frozen=True)
+class SourceConfig:
+    profile_dir: Path
+
+
+@dataclass(frozen=True)
 class Config:
     telegram: TelegramConfig
     output: OutputConfig
     wechat: WechatConfig
+    source: SourceConfig
 
 
 def load_config(root: Path | None = None, config_path: Path | None = None) -> Config:
@@ -42,6 +48,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     telegram = data.get("telegram", {})
     output = data.get("output", {})
     wechat = data.get("wechat", {})
+    source = data.get("source", {})
 
     bot_token = _pick(env, "TG_BOT_TOKEN", telegram.get("bot_token", ""))
     channel = _pick(env, "TG_CHANNEL", telegram.get("channel", "TechnologyNewsSyncAssistant"))
@@ -52,6 +59,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     profile_dir = _pick(env, "WECHAT_PROFILE_DIR", wechat.get("profile_dir", "runtime/wechat-profile"))
     default_mode = _pick(env, "WECHAT_DEFAULT_MODE", wechat.get("default_mode", "draft"))
     author = _pick(env, "WECHAT_AUTHOR", wechat.get("author", "程锦学堂"))
+    source_profile_dir = _pick(env, "SOURCE_PROFILE_DIR", source.get("profile_dir", "runtime/source-profile"))
 
     return Config(
         telegram=TelegramConfig(
@@ -66,6 +74,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
             default_mode=default_mode,
             author=author,
         ),
+        source=SourceConfig(profile_dir=_resolve(root, source_profile_dir)),
     )
 
 

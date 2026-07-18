@@ -221,6 +221,16 @@ def test_stats_domains_accepts_typo_alias():
     assert args.func == cli_module.cmd_stats_domains
 
 
+def test_source_login_command_parses_url_and_timeout():
+    args = build_parser().parse_args(
+        ["source-login", "--url", "https://x.com/SpaceXAI/status/1", "--timeout", "1"]
+    )
+
+    assert args.func == cli_module.cmd_source_login
+    assert args.url == "https://x.com/SpaceXAI/status/1"
+    assert args.timeout == 1
+
+
 def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_path):
     image = tmp_path / "001_PIC_001_含 空格 图片.jpg"
     video = tmp_path / "001_VID_001_含 空格 视频.mp4"

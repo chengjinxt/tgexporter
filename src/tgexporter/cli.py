@@ -12,6 +12,7 @@ from .markdown_renderer import MarkdownRenderer
 from .source_sites import source_rule_for_url
 from .state import StateStore
 from .telegram_bot import TelegramBotClient
+from .web_capture import open_source_login_browser
 from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
 
 MARKDOWN_ASSET_RE = re.compile(r"!?\[[^\]]*]\((?P<target>[^)]+)\)")
@@ -53,6 +54,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stats.add_argument("--limit", type=int, default=50, help="Maximum number of domains to show.")
     stats.set_defaults(func=cmd_stats_domains)
+
+    source_login = subparsers.add_parser(
+        "source-login",
+        help="Open a persistent browser for logging into source websites.",
+    )
+    source_login.add_argument("--url", required=True, help="Source website URL to open.")
+    source_login.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Seconds to keep the login browser open. Use 0 to wait for Enter.",
+    )
+    source_login.set_defaults(func=cmd_source_login)
 
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
     add_channel_argument(listen)
@@ -155,9 +169,19 @@ def cmd_stats_domains(args) -> int:
     for domain, count in rows:
         rule = source_rule_for_url(f"https://{domain}/")
         if rule:
-            print(f"{domain}\t{count}\t{rule.name}\t{rule.resource_method}\t兜底：{rule.fallback_method}")
+            print(
+                f"{domain}\t{count}\t{rule.name}\t{rule.resource_method}"
+                f"\t兜底：{rule.fallback_method}\t地址：{rule.link_display}"
+                f"\t登录：{rule.login_requirement}"
+            )
         else:
             print(f"{domain}\t{count}")
+    return 0
+
+
+def cmd_source_login(args) -> int:
+    config = load_config(args.root)
+    open_source_login_browser(args.url, config.source.profile_dir, timeout_seconds=args.timeout)
     return 0
 
 
@@ -344,6 +368,7 @@ def build_collector(
         channel=channel_override or config.telegram.channel,
         timezone=config.output.timezone,
         proxy_url=config.telegram.proxy_url,
+        source_profile_dir=config.source.profile_dir,
     )
     return collector, config
 

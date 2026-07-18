@@ -13,6 +13,9 @@ profile_dir = "runtime/wechat-profile"
 default_mode = "draft"
 author = "程锦学堂"
 
+[source]
+profile_dir = "runtime/source-profile"
+
 [telethon]
 enabled = false
 api_id = ""

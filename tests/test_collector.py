@@ -14,6 +14,7 @@ from tgexporter.collector import (
     collect_text,
     enrich_wechat_article_links,
     is_transient_telegram_error,
+    should_prompt_source_login,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.link_enricher import PageMetadata
@@ -278,7 +279,7 @@ def test_download_link_images_tries_next_candidate_when_first_is_unsuitable(tmp_
 
 
 def test_capture_link_image_uses_web_screenshot_when_link_images_fail(tmp_path: Path, monkeypatch):
-    def fake_capture(url, destination):
+    def fake_capture(url, destination, profile_dir=None):
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
         Path(destination).write_bytes(b"screenshot")
         return True
@@ -340,3 +341,16 @@ def test_transient_telegram_error_does_not_retry_invalid_token():
     error = TelegramBotError("Telegram API getUpdates failed: Unauthorized: invalid token")
 
     assert not is_transient_telegram_error(error)
+
+
+def test_source_login_prompt_skips_public_sites():
+    from tgexporter.source_sites import source_rule_for_url
+
+    assert not should_prompt_source_login(source_rule_for_url("https://www.cls.cn/detail/2427193"))
+
+
+def test_source_login_prompt_detects_login_or_subscription_sites():
+    from tgexporter.source_sites import source_rule_for_url
+
+    assert should_prompt_source_login(source_rule_for_url("https://x.com/SpaceXAI/status/1"))
+    assert should_prompt_source_login(source_rule_for_url("https://www.theinformation.com/articles/example"))

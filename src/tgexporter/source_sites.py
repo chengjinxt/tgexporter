@@ -11,6 +11,9 @@ class SourceSiteRule:
     resource_method: str
     fallback_method: str
     notes: str
+    link_display: str = "正文中显示来源名称和完整地址。"
+    login_requirement: str = "通常无需登录"
+    login_hint: str = ""
 
 
 SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
@@ -20,6 +23,8 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         resource_method="浏览器渲染后截取微博正文中的最大图片",
         fallback_method="Google 图片搜索同标题相似配图",
         notes="匿名 HTTP 通常跳转到 Visitor System，不能只靠 urllib 抓图。",
+        login_requirement="可能需要登录",
+        login_hint="如遇 Visitor System 或看不到图片，先运行 source-login 登录微博。",
     ),
     "m.weibo.cn": SourceSiteRule(
         domain="m.weibo.cn",
@@ -27,6 +32,8 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         resource_method="浏览器渲染后截取微博正文中的最大图片",
         fallback_method="Google 图片搜索同标题相似配图",
         notes="移动页匿名访问也可能进入 Visitor System。",
+        login_requirement="可能需要登录",
+        login_hint="如遇 Visitor System 或看不到图片，先运行 source-login 登录微博。",
     ),
     "sohu.com": SourceSiteRule(
         domain="sohu.com",
@@ -62,6 +69,8 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         resource_method="OpenGraph / 正文 img",
         fallback_method="浏览器截图或 Google 图片搜索",
         notes="页面结构可能随地区和订阅提示变化。",
+        login_requirement="可能需要人机验证",
+        login_hint="如果抓到 Reuters 访问受限页，先运行 source-login 完成人机验证。",
     ),
     "finance.sina.com.cn": SourceSiteRule(
         domain="finance.sina.com.cn",
@@ -73,9 +82,11 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "x.com": SourceSiteRule(
         domain="x.com",
         name="X / Twitter",
-        resource_method="浏览器渲染后截取正文媒体",
+        resource_method="浏览器渲染后截取正文媒体；无媒体时截取单条 Post 正文区域",
         fallback_method="Google 图片搜索同标题相似配图",
         notes="匿名页面经常受登录墙影响，直接 HTTP 抓取通常不可依赖。",
+        login_requirement="可能需要登录",
+        login_hint="如果 X 页面提示登录或无法查看 Post，先运行 source-login 登录 X。",
     ),
     "mp.weixin.qq.com": SourceSiteRule(
         domain="mp.weixin.qq.com",
@@ -83,6 +94,25 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         resource_method="保留为正文超链接，并从页面提取 mmbiz.qpic.cn 正文图片作为配图",
         fallback_method="浏览器截图正文或 Google 图片搜索",
         notes="该域名不进入普通引用来源统计，也不输出到文末引用区。",
+        link_display="正文中显示为公众号超链接。",
+        login_requirement="通常无需登录",
+    ),
+    "theinformation.com": SourceSiteRule(
+        domain="theinformation.com",
+        name="The Information",
+        resource_method="浏览器关闭订阅弹窗后截取新闻主图",
+        fallback_method="截图文章正文区域或 Google 图片搜索同标题相似配图",
+        notes="页面常见订阅弹窗或付费墙，需先关闭弹窗再取图。",
+        login_requirement="可能需要登录或订阅",
+        login_hint="如果只能看到订阅弹窗或付费墙，先运行 source-login 登录 The Information。",
+    ),
+    "cls.cn": SourceSiteRule(
+        domain="cls.cn",
+        name="科创板日报 / 财联社",
+        resource_method="优先正文 img；无文章图时截图正文内容区域",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="部分文章只有正文文字，无配图时截图正文首屏，避开页面头部和广告。",
+        login_requirement="通常无需登录",
     ),
 }
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 BLOCKED_PAGE_MARKERS = (
     "sina visitor system",
@@ -9,6 +10,15 @@ BLOCKED_PAGE_MARKERS = (
     "passport.weibo",
     "detected unusual activity",
     "not a robot",
+    "i am not a robot",
+    "captcha",
+    "cloudflare",
+    "ray id",
+    "访问暂时受限",
+    "我不是机器人",
+    "请验证您是真人",
+    "正在进行安全验证",
+    "验证您不是自动程序",
     "block reference id",
 )
 
@@ -19,22 +29,22 @@ DESKTOP_USER_AGENT = (
 )
 
 
-def capture_source_image(url: str, destination: Path, timeout_ms: int = 30000) -> bool:
+def capture_source_image(
+    url: str,
+    destination: Path,
+    timeout_ms: int = 30000,
+    profile_dir: Path | None = None,
+) -> bool:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return False
 
     destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            context = browser.new_context(
-                viewport={"width": 1365, "height": 900},
-                device_scale_factor=1,
-                locale="zh-CN",
-                user_agent=DESKTOP_USER_AGENT,
-            )
+            context, close_context = create_browser_context(playwright, headless=True, profile_dir=profile_dir)
             page = context.new_page()
             page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
             page.set_default_timeout(timeout_ms)
@@ -51,10 +61,64 @@ def capture_source_image(url: str, destination: Path, timeout_ms: int = 30000) -
                     return True
                 return screenshot_article_region(page, destination)
             finally:
-                browser.close()
+                close_context()
     except Exception:
         destination.unlink(missing_ok=True)
         return False
+
+
+def open_source_login_browser(url: str, profile_dir: Path, timeout_seconds: int = 600) -> None:
+    from playwright.sync_api import sync_playwright
+
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    with sync_playwright() as playwright:
+        context, close_context = create_browser_context(playwright, headless=False, profile_dir=profile_dir)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            print(f"Source login browser opened: {url}", flush=True)
+            print(f"Profile: {profile_dir}", flush=True)
+            if timeout_seconds > 0:
+                print(f"Keep this browser open for {timeout_seconds} seconds, or press Enter here to close it.", flush=True)
+                wait_for_enter_or_timeout(page, timeout_seconds)
+            else:
+                input("Log in in the opened browser, then press Enter to close it...")
+        finally:
+            close_context()
+
+
+def create_browser_context(playwright, headless: bool, profile_dir: Path | None = None):
+    launch_args = ["--disable-blink-features=AutomationControlled"]
+    context_options = {
+        "viewport": {"width": 1365, "height": 900},
+        "device_scale_factor": 1,
+        "locale": "zh-CN",
+        "user_agent": DESKTOP_USER_AGENT,
+    }
+    if profile_dir is not None:
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        context = playwright.chromium.launch_persistent_context(
+            str(profile_dir),
+            headless=headless,
+            args=launch_args,
+            **context_options,
+        )
+        return context, context.close
+    browser = playwright.chromium.launch(headless=headless, args=launch_args)
+    context = browser.new_context(**context_options)
+    return context, browser.close
+
+
+def wait_for_enter_or_timeout(page, timeout_seconds: int) -> None:
+    import msvcrt
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        page.wait_for_timeout(500)
+        if msvcrt.kbhit():
+            msvcrt.getwch()
+            return
 
 
 def dismiss_common_overlays(page) -> None:
@@ -74,13 +138,35 @@ def dismiss_common_overlays(page) -> None:
                 page.wait_for_timeout(500)
         except Exception:
             continue
+    close_selectors = (
+        "button[aria-label*='close' i]",
+        "button[aria-label*='关闭']",
+        "[role='button'][aria-label*='close' i]",
+        "[role='button'][aria-label*='关闭']",
+        "button:has-text('×')",
+        "button:has-text('✕')",
+        "button:has-text('Close')",
+    )
+    for selector in close_selectors:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() > 0 and locator.is_visible(timeout=800):
+                locator.click(timeout=1500)
+                page.wait_for_timeout(500)
+        except Exception:
+            continue
 
 
 def is_blocked_page(page) -> bool:
     try:
-        marker = f"{page.url}\n{page.title()}\n{page.locator('body').inner_text(timeout=2000)[:800]}".lower()
+        title = page.title().strip()
+        body_text = page.locator("body").inner_text(timeout=2000).strip()
     except Exception:
         return False
+    hostname = (urlparse(page.url).hostname or "").removeprefix("www.").lower()
+    if hostname == "reuters.com" and title.lower() in {"reuters.com", "www.reuters.com"} and len(body_text) < 30:
+        return True
+    marker = f"{page.url}\n{title}\n{body_text[:800]}".lower()
     return any(item in marker for item in BLOCKED_PAGE_MARKERS)
 
 
@@ -131,7 +217,16 @@ def screenshot_article_region(page, destination: Path) -> bool:
     selected = page.evaluate(
         """
         () => {
-            const selectors = [
+            const hostname = location.hostname.replace(/^www\\./, '').toLowerCase();
+            const domainSelectors = {
+                'x.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
+                'twitter.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
+                'reuters.com': ['article', '[data-testid*="Article"]', 'main'],
+                'theinformation.com': ['article', 'main', '[class*="article"]'],
+                'cls.cn': ['.detail-content', '.article-content', '.article', '.detail', 'main'],
+            };
+            const specificSelectors = domainSelectors[hostname] || [];
+            const defaultSelectors = [
                 'article',
                 'main',
                 '[class*="article"]',
@@ -141,6 +236,7 @@ def screenshot_article_region(page, destination: Path) -> bool:
                 '[id*="content"]',
                 'body'
             ];
+            const selectors = [...specificSelectors, ...defaultSelectors];
             const seen = new Set();
             const candidates = [];
             for (const selector of selectors) {
@@ -150,13 +246,15 @@ def screenshot_article_region(page, destination: Path) -> bool:
                     const rect = node.getBoundingClientRect();
                     const text = (node.innerText || node.textContent || '').trim();
                     if (rect.width < 320 || rect.height < 180 || text.length < 80) continue;
-                    candidates.push({ node, textLength: text.length, area: rect.width * rect.height, top: rect.top + window.scrollY });
+                    const isSpecific = specificSelectors.includes(selector);
+                    candidates.push({ node, textLength: text.length, area: rect.width * rect.height, top: rect.top + window.scrollY, isSpecific });
                 }
             }
-            candidates.sort((a, b) => (b.textLength + b.area / 2000 - Math.min(b.top, 3000)) - (a.textLength + a.area / 2000 - Math.min(a.top, 3000)));
+            const preferred = candidates.some(item => item.isSpecific) ? candidates.filter(item => item.isSpecific) : candidates;
+            preferred.sort((a, b) => (b.textLength + b.area / 2000 - Math.min(b.top, 3000)) - (a.textLength + a.area / 2000 - Math.min(a.top, 3000)));
             document.querySelectorAll('[data-tgexporter-capture]').forEach(node => node.removeAttribute('data-tgexporter-capture'));
-            if (!candidates.length) return false;
-            candidates[0].node.setAttribute('data-tgexporter-capture', 'article');
+            if (!preferred.length) return false;
+            preferred[0].node.setAttribute('data-tgexporter-capture', 'article');
             return true;
         }
         """

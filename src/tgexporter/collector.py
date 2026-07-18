@@ -25,6 +25,7 @@ from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_met
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, LinkRef, MediaAsset
 from .placeholder_image import write_placeholder_png
+from .source_sites import SourceSiteRule, source_rule_for_url
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 from .text_filters import is_channel_promo_line, normalize_text
@@ -52,6 +53,7 @@ class TelegramCollector:
         channel: str,
         timezone: str = "Asia/Shanghai",
         proxy_url: str | None = None,
+        source_profile_dir: Path | None = None,
     ) -> None:
         self.client = client
         self.state = state
@@ -59,6 +61,8 @@ class TelegramCollector:
         self.channel = normalize_channel(channel)
         self.timezone = ZoneInfo(timezone)
         self.proxy_url = proxy_url
+        self.source_profile_dir = source_profile_dir
+        self._warned_source_login_domains: set[str] = set()
 
     def poll_once(self, timeout: int = 30, latest_only: bool = False) -> list[Path]:
         last_update_id = self.state.get_last_update_id()
@@ -296,10 +300,12 @@ class TelegramCollector:
         for link in article.links:
             filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")
             destination = date_dir / filename
-            if not capture_source_image(link.url, destination):
+            if not capture_source_image(link.url, destination, profile_dir=self.source_profile_dir):
+                self._warn_source_login_if_needed(link)
                 continue
             if not is_suitable_article_image(destination):
                 destination.unlink(missing_ok=True)
+                self._warn_source_login_if_needed(link)
                 continue
             return [
                 MediaAsset(
@@ -311,6 +317,22 @@ class TelegramCollector:
                 )
             ]
         return []
+
+    def _warn_source_login_if_needed(self, link: LinkRef) -> None:
+        rule = source_rule_for_url(link.url)
+        if not should_prompt_source_login(rule):
+            return
+        if rule.domain in self._warned_source_login_domains:
+            return
+        self._warned_source_login_domains.add(rule.domain)
+        profile_dir = self.source_profile_dir or Path("runtime/source-profile")
+        hint = f" {rule.login_hint}" if rule.login_hint else ""
+        print(
+            "Source site may require login: "
+            f"{rule.domain} ({rule.login_requirement}).{hint} "
+            f'Login profile: {profile_dir}. Command: tgexporter source-login --url "{link.url}"',
+            file=sys.stderr,
+        )
 
     def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         for image_url in find_google_image_urls(article.title, proxy_url=self.proxy_url):
@@ -342,7 +364,7 @@ class TelegramCollector:
     def _create_placeholder_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")
         destination = date_dir / filename
-        write_placeholder_png(destination)
+        write_placeholder_png(destination, title=article.title)
         return [
             MediaAsset(
                 kind="image",
@@ -755,6 +777,15 @@ def is_transient_telegram_error(exc: TelegramBotError) -> bool:
     return any(marker in text for marker in transient_markers) and not any(
         marker in text for marker in permanent_markers
     )
+
+
+def should_prompt_source_login(rule: SourceSiteRule | None) -> bool:
+    if rule is None:
+        return False
+    requirement = rule.login_requirement.strip()
+    if requirement in {"无需登录", "通常无需登录"}:
+        return False
+    return any(marker in requirement for marker in ("登录", "订阅", "需要"))
 
 
 def is_internal_processing_error(exc: Exception) -> bool:
