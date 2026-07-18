@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from urllib.parse import urlparse
+
+
+@dataclass(frozen=True)
+class SourceSiteRule:
+    domain: str
+    name: str
+    resource_method: str
+    fallback_method: str
+    notes: str
+
+
+SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
+    "weibo.com": SourceSiteRule(
+        domain="weibo.com",
+        name="微博 / 新浪科技",
+        resource_method="浏览器渲染后截取微博正文中的最大图片",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="匿名 HTTP 通常跳转到 Visitor System，不能只靠 urllib 抓图。",
+    ),
+    "m.weibo.cn": SourceSiteRule(
+        domain="m.weibo.cn",
+        name="微博移动页",
+        resource_method="浏览器渲染后截取微博正文中的最大图片",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="移动页匿名访问也可能进入 Visitor System。",
+    ),
+    "sohu.com": SourceSiteRule(
+        domain="sohu.com",
+        name="搜狐网",
+        resource_method="优先 OpenGraph / 正文 img；无合格正文图时截图文章正文区域",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="部分文章的 og:image 是搜狐 Logo 或二维码，需要过滤。",
+    ),
+    "bloomberg.com": SourceSiteRule(
+        domain="bloomberg.com",
+        name="Bloomberg",
+        resource_method="浏览器渲染后截取最大新闻图",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="普通 HTTP 可能 403 或遇到订阅遮罩，需用浏览器 DOM/截图兜底。",
+    ),
+    "qbitai.com": SourceSiteRule(
+        domain="qbitai.com",
+        name="量子位",
+        resource_method="正文 img；下载图片时带原文 Referer",
+        fallback_method="浏览器截图或 Google 图片搜索",
+        notes="og:image 可能是站点 Logo，正文图通常在 i.qbitai.com。",
+    ),
+    "ithome.com": SourceSiteRule(
+        domain="ithome.com",
+        name="IT之家",
+        resource_method="OpenGraph / 正文 img",
+        fallback_method="浏览器截图或 Google 图片搜索",
+        notes="通常有可直接下载的新闻配图。",
+    ),
+    "reuters.com": SourceSiteRule(
+        domain="reuters.com",
+        name="Reuters",
+        resource_method="OpenGraph / 正文 img",
+        fallback_method="浏览器截图或 Google 图片搜索",
+        notes="页面结构可能随地区和订阅提示变化。",
+    ),
+    "finance.sina.com.cn": SourceSiteRule(
+        domain="finance.sina.com.cn",
+        name="新浪财经",
+        resource_method="OpenGraph / 正文 img；必要时浏览器截取正文图",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="新浪系页面可能有登录、跳转或防盗链，下载图片时优先携带 Referer。",
+    ),
+    "x.com": SourceSiteRule(
+        domain="x.com",
+        name="X / Twitter",
+        resource_method="浏览器渲染后截取正文媒体",
+        fallback_method="Google 图片搜索同标题相似配图",
+        notes="匿名页面经常受登录墙影响，直接 HTTP 抓取通常不可依赖。",
+    ),
+}
+
+
+def source_rule_for_url(url: str) -> SourceSiteRule | None:
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname.startswith("www."):
+        hostname = hostname[4:]
+    for domain in sorted(SOURCE_SITE_RULES, key=len, reverse=True):
+        if hostname == domain or hostname.endswith(f".{domain}"):
+            return SOURCE_SITE_RULES[domain]
+    return None

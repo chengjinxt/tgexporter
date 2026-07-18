@@ -215,9 +215,15 @@ def test_next_batch_index_skips_existing_batch_dirs(tmp_path):
     assert next_batch_index(tmp_path) == 4
 
 
+def test_stats_domains_accepts_typo_alias():
+    args = build_parser().parse_args(["stats-domainsstats-domains"])
+
+    assert args.func == cli_module.cmd_stats_domains
+
+
 def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_path):
-    image = tmp_path / "001_PIC_001.jpg"
-    video = tmp_path / "001_VID_001.mp4"
+    image = tmp_path / "001_PIC_001_含 空格 图片.jpg"
+    video = tmp_path / "001_VID_001_含 空格 视频.mp4"
     unused = tmp_path / "unused.jpg"
     article = tmp_path / "001-title.md"
     image.write_bytes(b"image")
@@ -226,9 +232,9 @@ def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_pat
     article.write_text(
         """# title
 
-![cover](001_PIC_001.jpg)
+![cover](001_PIC_001_含 空格 图片.jpg)
 
-视频：[clip](001_VID_001.mp4)
+视频：[clip](001_VID_001_含 空格 视频.mp4)
 
 [external](https://example.com/a)
 """,
@@ -239,7 +245,7 @@ def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_pat
 
     moved = move_published_batch([article], tmp_path / "第1批")
 
-    assert sorted(path.name for path in moved) == ["001-title.md", "001_PIC_001.jpg", "001_VID_001.mp4"]
+    assert sorted(path.name for path in moved) == ["001-title.md", "001_PIC_001_含 空格 图片.jpg", "001_VID_001_含 空格 视频.mp4"]
     assert not article.exists()
     assert not image.exists()
     assert not video.exists()

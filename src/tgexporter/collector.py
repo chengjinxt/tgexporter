@@ -29,6 +29,7 @@ from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 from .text_filters import is_channel_promo_line, normalize_text
 from .video_cover import create_video_cover
+from .web_capture import capture_source_image
 
 BOT_API_DOWNLOAD_LIMIT = 20_000_000
 
@@ -175,6 +176,8 @@ class TelegramCollector:
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_link_images(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
+            article.media.extend(self._capture_link_image(article, date_dir))
+        if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_google_image(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._create_placeholder_image(article, date_dir))
@@ -277,6 +280,26 @@ class TelegramCollector:
                         title=link.name,
                     )
                 ]
+        return []
+
+    def _capture_link_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        for link in article.links:
+            filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")
+            destination = date_dir / filename
+            if not capture_source_image(link.url, destination):
+                continue
+            if not is_suitable_article_image(destination):
+                destination.unlink(missing_ok=True)
+                continue
+            return [
+                MediaAsset(
+                    kind="image",
+                    filename=filename,
+                    path=destination,
+                    source="web_capture",
+                    title=f"网页截图：{link.name}",
+                )
+            ]
         return []
 
     def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:

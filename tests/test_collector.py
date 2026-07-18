@@ -249,6 +249,40 @@ def test_download_link_images_tries_next_candidate_when_first_is_unsuitable(tmp_
     ]
 
 
+def test_capture_link_image_uses_web_screenshot_when_link_images_fail(tmp_path: Path, monkeypatch):
+    def fake_capture(url, destination):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"screenshot")
+        return True
+
+    monkeypatch.setattr(collector_module, "capture_source_image", fake_capture)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 16, tzinfo=UTC),
+        date_key="20260716",
+        daily_index=9,
+        title="正文截图配图文章",
+        text="正文",
+        links=[LinkRef(name="Sohu", url="https://www.sohu.com/a/1050184362_120988576")],
+    )
+
+    assets = collector._capture_link_image(article, tmp_path / "发布内容" / "20260716")
+
+    assert len(assets) == 1
+    assert assets[0].source == "web_capture"
+    assert assets[0].filename == "20260716_009_PIC_001_正文截图配图文章.png"
+
+
 def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):
     collector = TelegramCollector(
         client=FakeBotClient(),

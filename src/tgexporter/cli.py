@@ -9,6 +9,7 @@ from pathlib import Path
 from .collector import TelegramCollector
 from .config import load_config, mask_secret, require_bot_token
 from .markdown_renderer import MarkdownRenderer
+from .source_sites import source_rule_for_url
 from .state import StateStore
 from .telegram_bot import TelegramBotClient
 from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
@@ -45,7 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_channel_argument(doctor)
     doctor.set_defaults(func=cmd_doctor)
 
-    stats = subparsers.add_parser("stats-domains", help="Show source domain statistics from rendered articles.")
+    stats = subparsers.add_parser(
+        "stats-domains",
+        aliases=["stats-domainsstats-domains"],
+        help="Show source domain statistics from rendered articles.",
+    )
     stats.add_argument("--limit", type=int, default=50, help="Maximum number of domains to show.")
     stats.set_defaults(func=cmd_stats_domains)
 
@@ -148,7 +153,11 @@ def cmd_stats_domains(args) -> int:
         print("No reference domains recorded yet.")
         return 0
     for domain, count in rows:
-        print(f"{domain}\t{count}")
+        rule = source_rule_for_url(f"https://{domain}/")
+        if rule:
+            print(f"{domain}\t{count}\t{rule.name}\t{rule.resource_method}\t兜底：{rule.fallback_method}")
+        else:
+            print(f"{domain}\t{count}")
     return 0
 
 
@@ -308,9 +317,9 @@ def normalize_markdown_asset_target(target: str) -> str:
     value = target.strip()
     if not value:
         return ""
-    if " " in value:
-        value = value.split()[0]
-    return value.strip("<>").strip('"').strip("'")
+    if value.startswith("<") and ">" in value:
+        return value[1 : value.index(">")].strip()
+    return value.strip('"').strip("'")
 
 
 def is_external_asset_target(target: str) -> bool:
