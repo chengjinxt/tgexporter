@@ -6,14 +6,17 @@ import pytest
 from tgexporter import collector as collector_module
 from tgexporter.collector import (
     TelegramCollector,
+    apply_plain_wechat_markdown_links,
     choose_video_variant,
     clean_article_text,
     collect_entity_links,
     collect_entity_urls,
     collect_text,
+    enrich_wechat_article_links,
     is_transient_telegram_error,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
+from tgexporter.link_enricher import PageMetadata
 from tgexporter.models import ArticleDraft, LinkRef
 from tgexporter.state import StateStore
 from tgexporter.telegram_bot import TelegramBotError
@@ -148,6 +151,31 @@ def test_collect_text_keeps_wechat_hidden_link_as_markdown_link():
     ]
 
     assert collect_text(messages) == "据 [长安街知事](https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw) 报道"
+
+
+def test_apply_plain_wechat_link_line_as_markdown_link():
+    text = "正文\n\nTech 星球 (https://mp.weixin.qq.com/s/mdg66FvdwwRFsg20HHnr4g)"
+
+    assert apply_plain_wechat_markdown_links(text).endswith(
+        "[Tech 星球](https://mp.weixin.qq.com/s/mdg66FvdwwRFsg20HHnr4g)"
+    )
+
+
+def test_enrich_wechat_article_links_fetches_mmbiz_images(monkeypatch):
+    def fake_fetch(url, proxy_url=None):
+        return PageMetadata(
+            title="微信文章标题",
+            image_url="https://mmbiz.qpic.cn/mmbiz_jpg/example/0?wx_fmt=jpeg",
+            image_urls=("https://mmbiz.qpic.cn/mmbiz_jpg/example/0?wx_fmt=jpeg",),
+        )
+
+    monkeypatch.setattr(collector_module, "fetch_page_metadata", fake_fetch)
+
+    links = enrich_wechat_article_links("[Tech 星球](https://mp.weixin.qq.com/s/mdg66FvdwwRFsg20HHnr4g)")
+
+    assert len(links) == 1
+    assert links[0].name == "Tech 星球"
+    assert links[0].image_url == "https://mmbiz.qpic.cn/mmbiz_jpg/example/0?wx_fmt=jpeg"
 
 
 def test_clean_article_text_removes_title_reference_and_channel_promo():

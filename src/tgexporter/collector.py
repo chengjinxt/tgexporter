@@ -21,7 +21,7 @@ from .filename import (
 )
 from .image_search import find_google_image_urls
 from .image_filter import is_suitable_article_image
-from .link_enricher import ExtraLink, enrich_links, is_wechat_article_url
+from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_metadata, is_wechat_article_url
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, LinkRef, MediaAsset
 from .placeholder_image import write_placeholder_png
@@ -32,6 +32,15 @@ from .video_cover import create_video_cover
 from .web_capture import capture_source_image
 
 BOT_API_DOWNLOAD_LIMIT = 20_000_000
+MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)]\((?P<url>https?://[^)\s]+)\)")
+WECHAT_PAREN_LINK_LINE_RE = re.compile(
+    r"^(?P<label>[^\n\[\]()（）]{1,80}?)\s*[（(]\s*(?P<url>https?://mp\.weixin\.qq\.com/[^\s)）]+)\s*[)）]\s*$",
+    re.IGNORECASE,
+)
+WECHAT_BARE_LINK_LINE_RE = re.compile(
+    r"^(?P<url>https?://mp\.weixin\.qq\.com/[^\s)）]+)\s*$",
+    re.IGNORECASE,
+)
 
 
 class TelegramCollector:
@@ -142,7 +151,7 @@ class TelegramCollector:
         first = messages[0]
         published_at = datetime.fromtimestamp(int(first["date"]), UTC).astimezone(self.timezone)
         date_key = published_at.strftime("%Y%m%d")
-        raw_text = collect_text(messages)
+        raw_text = apply_plain_wechat_markdown_links(collect_text(messages))
         title = derive_title(raw_text, message_ids[0])
         daily_index = self.state.next_daily_index(date_key)
         grouped_id = first.get("media_group_id")
@@ -154,6 +163,7 @@ class TelegramCollector:
             extra_links=extra_links,
             proxy_url=self.proxy_url,
         )
+        links.extend(unique_links(enrich_wechat_article_links(raw_text, proxy_url=self.proxy_url), links))
         text = clean_article_text(raw_text, title, [link.name for link in links])
         article = ArticleDraft(
             source="telegram",
@@ -430,6 +440,66 @@ def apply_wechat_markdown_links(text: str, entities: list[dict[str, Any]]) -> st
         rendered = rendered[:start] + value + rendered[end:]
         last_start = start
     return rendered
+
+
+def apply_plain_wechat_markdown_links(text: str) -> str:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        parenthesized = WECHAT_PAREN_LINK_LINE_RE.match(line)
+        if parenthesized:
+            label = parenthesized.group("label").strip("：: -")
+            url = parenthesized.group("url").strip()
+            lines.append(f"[{label or '微信文章'}]({url})")
+            continue
+        bare = WECHAT_BARE_LINK_LINE_RE.match(line)
+        if bare:
+            url = bare.group("url").strip()
+            lines.append(f"[微信文章]({url})")
+            continue
+        lines.append(raw_line)
+    return "\n".join(lines)
+
+
+def enrich_wechat_article_links(text: str, proxy_url: str | None = None) -> list[LinkRef]:
+    found: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
+    for match in MARKDOWN_LINK_RE.finditer(text or ""):
+        url = match.group("url").strip()
+        if not is_wechat_article_url(url) or url in seen:
+            continue
+        seen.add(url)
+        found.append((url, match.group("label").strip()))
+    for url in extract_urls(text or ""):
+        if not is_wechat_article_url(url) or url in seen:
+            continue
+        seen.add(url)
+        found.append((url, None))
+
+    links: list[LinkRef] = []
+    for url, label in found:
+        metadata = fetch_page_metadata(url, proxy_url=proxy_url)
+        name = label or metadata.title or urllib.parse.urlparse(url).netloc or "微信文章"
+        links.append(
+            LinkRef(
+                name=name,
+                url=url,
+                image_url=metadata.image_url,
+                image_urls=metadata.image_urls,
+            )
+        )
+    return links
+
+
+def unique_links(candidates: list[LinkRef], existing: list[LinkRef]) -> list[LinkRef]:
+    seen = {link.url for link in existing}
+    unique: list[LinkRef] = []
+    for link in candidates:
+        if link.url in seen:
+            continue
+        seen.add(link.url)
+        unique.append(link)
+    return unique
 
 
 def collect_entity_urls(messages: list[dict[str, Any]]) -> list[str]:

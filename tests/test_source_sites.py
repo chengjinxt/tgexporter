@@ -25,5 +25,13 @@ def test_source_rule_matches_multi_part_domain():
     assert rule.domain == "finance.sina.com.cn"
 
 
+def test_source_rule_matches_wechat_article_domain():
+    rule = source_rule_for_url("https://mp.weixin.qq.com/s/mdg66FvdwwRFsg20HHnr4g")
+
+    assert rule is not None
+    assert rule.domain == "mp.weixin.qq.com"
+    assert "mmbiz.qpic.cn" in rule.resource_method
+
+
 def test_source_rule_returns_none_for_unknown_domain():
     assert source_rule_for_url("https://example.invalid/article") is None

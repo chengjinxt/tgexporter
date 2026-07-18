@@ -77,6 +77,13 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         fallback_method="Google 图片搜索同标题相似配图",
         notes="匿名页面经常受登录墙影响，直接 HTTP 抓取通常不可依赖。",
     ),
+    "mp.weixin.qq.com": SourceSiteRule(
+        domain="mp.weixin.qq.com",
+        name="微信公众号文章",
+        resource_method="保留为正文超链接，并从页面提取 mmbiz.qpic.cn 正文图片作为配图",
+        fallback_method="浏览器截图正文或 Google 图片搜索",
+        notes="该域名不进入普通引用来源统计，也不输出到文末引用区。",
+    ),
 }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .filename import article_filename
+from .link_enricher import is_wechat_article_url
 from .models import ArticleDraft
 
 
@@ -63,8 +64,9 @@ class MarkdownRenderer:
                 lines.append(f"附件：[{label}]({media.filename})")
             lines.append("")
 
-        if article.links:
-            for link in article.links:
+        reference_links = [link for link in article.links if not is_wechat_article_url(link.url)]
+        if reference_links:
+            for link in reference_links:
                 lines.append(link.name)
                 lines.append("")
                 lines.append(link.url)
