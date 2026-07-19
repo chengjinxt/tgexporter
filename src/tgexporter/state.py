@@ -37,6 +37,31 @@ class StateStore:
             ).fetchone()
             return row is not None
 
+    def record_messages_processed(self, channel: str, message_ids: list[int], article_key_value: str) -> None:
+        with self._connect() as conn:
+            for message_id in message_ids:
+                conn.execute(
+                    """
+                    insert or ignore into messages(channel, message_id, article_key)
+                    values (?, ?, ?)
+                    """,
+                    (channel, message_id, article_key_value),
+                )
+
+    def article_path_by_title(self, channel: str, date_key: str, title: str) -> Path | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select markdown_path
+                from articles
+                where channel = ? and date_key = ? and title = ?
+                order by daily_index asc
+                limit 1
+                """,
+                (channel, date_key, title),
+            ).fetchone()
+            return Path(row[0]) if row else None
+
     def next_daily_index(self, date_key: str) -> int:
         with self._connect() as conn:
             row = conn.execute(

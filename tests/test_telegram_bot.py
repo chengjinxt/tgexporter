@@ -31,7 +31,7 @@ def test_get_updates_wraps_read_timeout_as_telegram_bot_error():
     with pytest.raises(TelegramBotError, match="read operation timed out"):
         client.get_updates(timeout=30)
 
-    assert opener.timeout == 90
+    assert opener.timeout == 45
 
 
 def test_get_updates_socket_timeout_exceeds_long_poll_timeout():
@@ -42,4 +42,4 @@ def test_get_updates_socket_timeout_exceeds_long_poll_timeout():
     with pytest.raises(TelegramBotError):
         client.get_updates(timeout=120)
 
-    assert opener.timeout == 180
+    assert opener.timeout == 135

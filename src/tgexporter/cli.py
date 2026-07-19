@@ -6,12 +6,12 @@ import shutil
 import sys
 from pathlib import Path
 
-from .collector import TelegramCollector
+from .collector import TelegramCollector, is_transient_telegram_error, telegram_network_hint
 from .config import load_config, mask_secret, require_bot_token
 from .markdown_renderer import MarkdownRenderer
 from .source_sites import source_rule_for_url
 from .state import StateStore
-from .telegram_bot import TelegramBotClient
+from .telegram_bot import TelegramBotClient, TelegramBotError
 from .web_capture import open_source_login_browser
 from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
 
@@ -135,8 +135,19 @@ def cmd_doctor(args) -> int:
     channel = args.channel or config.telegram.channel
     require_bot_token(config)
     client = TelegramBotClient(config.telegram.bot_token, proxy_url=config.telegram.proxy_url)
-    me = client.get_me()
-    updates = client.get_updates(timeout=2, allowed_updates=["channel_post", "edited_channel_post"])
+    try:
+        me = client.get_me()
+    except TelegramBotError as exc:
+        if is_transient_telegram_error(exc):
+            print(telegram_network_hint(exc, config.telegram.proxy_url), file=sys.stderr)
+        raise
+    try:
+        updates = client.get_updates(timeout=2, allowed_updates=["channel_post", "edited_channel_post"])
+    except TelegramBotError as exc:
+        if is_transient_telegram_error(exc):
+            print("Bot API getUpdates short poll failed.", file=sys.stderr)
+            print(telegram_network_hint(exc, config.telegram.proxy_url), file=sys.stderr)
+        raise
     print(f"Bot: @{me.get('username')} ({me.get('first_name')})")
     print(f"Token: {mask_secret(config.telegram.bot_token)}")
     print(f"Channel: @{channel.lstrip('@')}")

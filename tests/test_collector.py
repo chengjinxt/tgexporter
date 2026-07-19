@@ -13,7 +13,9 @@ from tgexporter.collector import (
     collect_entity_urls,
     collect_text,
     enrich_wechat_article_links,
+    find_existing_markdown_by_title,
     is_transient_telegram_error,
+    markdown_title,
     poll_timeout_after_transient_error,
     should_prompt_source_login,
     telegram_network_hint,
@@ -105,6 +107,58 @@ def test_collector_groups_media_album(tmp_path: Path):
     assert "相册文章" in paths[0].read_text(encoding="utf-8")
     assert (paths[0].parent / "20260711_001_PIC_001_相册文章.jpg").exists()
     assert (paths[0].parent / "20260711_001_PIC_002_相册文章.jpg").exists()
+
+
+def test_collector_skips_duplicate_title_already_on_disk(tmp_path: Path):
+    state = StateStore(tmp_path / "state.sqlite")
+    output_dir = tmp_path / "发布内容"
+    date_dir = output_dir / "20260711"
+    date_dir.mkdir(parents=True)
+    existing = date_dir / "20260711_013_大疆 EV50 飞越珠峰 8861 米.md"
+    existing.write_text(
+        """---
+title: "大疆 EV50 飞越珠峰 8861 米"
+---
+
+# 大疆 EV50 飞越珠峰 8861 米
+
+已有正文
+""",
+        encoding="utf-8",
+    )
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=state,
+        renderer=MarkdownRenderer(output_dir),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    updates = [
+        {
+            "update_id": 110,
+            "channel_post": {
+                "message_id": 20,
+                "date": 1783735200,
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "caption": "大疆 EV50 飞越珠峰 8861 米\n重复正文",
+            },
+        }
+    ]
+
+    paths = collector.process_updates(updates)
+
+    assert paths == []
+    assert state.message_processed("technologynewssyncassistant", 20)
+    assert sorted(path.name for path in date_dir.glob("*.md")) == [existing.name]
+
+
+def test_find_existing_markdown_by_title_searches_batch_subdirs(tmp_path: Path):
+    batch = tmp_path / "20260719" / "第1批"
+    batch.mkdir(parents=True)
+    article = batch / "old.md"
+    article.write_text("# 已发布文章\n\n正文", encoding="utf-8")
+
+    assert find_existing_markdown_by_title(tmp_path / "20260719", "已发布文章") == article
+    assert markdown_title(article) == "已发布文章"
 
 
 def test_choose_video_variant_prefers_downloadable_h264():

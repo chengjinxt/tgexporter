@@ -39,7 +39,7 @@ class TelegramBotClient:
             params["offset"] = offset
         if allowed_updates:
             params["allowed_updates"] = json.dumps(allowed_updates, ensure_ascii=False)
-        request_timeout = max(90, timeout + 60)
+        request_timeout = max(15, timeout + 15)
         result = self._request_json("getUpdates", params, timeout=request_timeout)
         if not isinstance(result, list):
             raise TelegramBotError("Unexpected getUpdates response.")

@@ -163,6 +163,15 @@ class TelegramCollector:
         date_key = published_at.strftime("%Y%m%d")
         raw_text = apply_plain_wechat_markdown_links(collect_text(messages))
         title = derive_title(raw_text, message_ids[0])
+        existing_path = self._find_existing_article(date_key, title)
+        if existing_path is not None:
+            self.state.record_messages_processed(
+                self.channel,
+                message_ids,
+                f"duplicate:{self.channel}:{date_key}:{normalize_text(title)}",
+            )
+            print(f"Skipped duplicate article: {title} (existing: {existing_path})", file=sys.stderr)
+            return None
         daily_index = self.state.next_daily_index(date_key)
         grouped_id = first.get("media_group_id")
         extra_links = collect_entity_links(messages)
@@ -206,6 +215,12 @@ class TelegramCollector:
         markdown_path = self.renderer.render(article)
         self.state.record_article(article, markdown_path)
         return markdown_path
+
+    def _find_existing_article(self, date_key: str, title: str) -> Path | None:
+        state_path = self.state.article_path_by_title(self.channel, date_key, title)
+        if state_path is not None:
+            return state_path
+        return find_existing_markdown_by_title(self.renderer.base_dir / date_key, title)
 
     def _download_message_media(
         self,
@@ -594,6 +609,36 @@ def clean_article_text(text: str, title: str, reference_names: list[str]) -> str
     while lines and lines[-1] == "":
         lines.pop()
     return "\n".join(lines)
+
+
+def find_existing_markdown_by_title(date_dir: Path, title: str) -> Path | None:
+    if not date_dir.exists():
+        return None
+    target = normalize_text(title)
+    for path in sorted(date_dir.rglob("*.md")):
+        if normalize_text(markdown_title(path)) == target:
+            return path
+    return None
+
+
+def markdown_title(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    in_frontmatter = bool(lines and lines[0].strip() == "---")
+    if in_frontmatter:
+        for line in lines[1:]:
+            stripped = line.strip()
+            if stripped == "---":
+                break
+            if stripped.startswith("title:"):
+                return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    return ""
 
 
 def select_latest_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]:

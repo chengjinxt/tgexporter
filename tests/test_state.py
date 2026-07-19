@@ -31,3 +31,12 @@ def test_state_records_reference_domain_stats(tmp_path: Path):
     state.record_article(article, tmp_path / "article.md")
 
     assert state.domain_stats() == [("bloomberg.com", 1), ("openai.com", 1)]
+
+
+def test_state_records_duplicate_messages_without_rendering_article(tmp_path: Path):
+    state = StateStore(tmp_path / "state.sqlite")
+
+    state.record_messages_processed("technologynewssyncassistant", [13, 14], "duplicate:key")
+
+    assert state.message_processed("technologynewssyncassistant", 13)
+    assert state.message_processed("technologynewssyncassistant", 14)
