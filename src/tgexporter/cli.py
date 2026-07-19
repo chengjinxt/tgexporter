@@ -13,6 +13,7 @@ from .source_sites import source_rule_for_url
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 from .web_capture import open_source_login_browser
+from .web_sources import WebSourceCollector, load_web_source_group, run_web_source_loop
 from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
 
 MARKDOWN_ASSET_RE = re.compile(r"!?\[[^\]]*]\((?P<target>[^)]+)\)")
@@ -67,6 +68,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to keep the login browser open. Use 0 to wait for Enter.",
     )
     source_login.set_defaults(func=cmd_source_login)
+
+    collect_web = subparsers.add_parser(
+        "collect-web",
+        help="Collect public web education sources into Markdown articles.",
+    )
+    collect_web.add_argument(
+        "--group",
+        default=None,
+        help="Web source group to collect. Defaults to WEB_SOURCE_GROUP or chunhui-xuefu.",
+    )
+    collect_web.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Maximum new articles to render per run. Defaults to WEB_SOURCE_LIMIT or 1.",
+    )
+    collect_web.add_argument(
+        "--interval-seconds",
+        type=int,
+        default=None,
+        help="Run forever and collect every N seconds. Omit or set 0 to run once.",
+    )
+    collect_web.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Continue scanning older unprocessed source articles after the newest processed URL.",
+    )
+    collect_web.add_argument("--save-dir", type=Path, default=None, help="Base directory for rendered Markdown and media.")
+    collect_web.set_defaults(func=cmd_collect_web)
 
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
     add_channel_argument(listen)
@@ -195,6 +225,24 @@ def cmd_stats_domains(args) -> int:
 def cmd_source_login(args) -> int:
     config = load_config(args.root)
     open_source_login_browser(args.url, config.source.profile_dir, timeout_seconds=args.timeout)
+    return 0
+
+
+def cmd_collect_web(args) -> int:
+    config = load_config(args.root)
+    group = args.group or config.web_sources.default_group
+    limit = args.limit if args.limit is not None else config.web_sources.max_articles_per_run
+    interval = args.interval_seconds if args.interval_seconds is not None else 0
+    sources = load_web_source_group(group)
+    state = StateStore(args.root / "data" / "state.sqlite")
+    renderer = MarkdownRenderer((args.save_dir or config.output.base_dir).resolve())
+    collector = WebSourceCollector(
+        state=state,
+        renderer=renderer,
+        timezone=config.output.timezone,
+        proxy_url=config.telegram.proxy_url,
+    )
+    run_web_source_loop(collector, sources=sources, limit=limit, interval_seconds=interval, backfill=args.backfill)
     return 0
 
 

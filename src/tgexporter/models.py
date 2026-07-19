@@ -36,6 +36,7 @@ class ArticleDraft:
     links: list[LinkRef] = field(default_factory=list)
     media: list[MediaAsset] = field(default_factory=list)
     status: str = "collected"
+    source_id: str | None = None
 
     @property
     def prefix(self) -> str:

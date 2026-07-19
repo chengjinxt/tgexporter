@@ -114,6 +114,14 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         notes="部分文章只有正文文字，无配图时截图正文首屏，避开页面头部和广告。",
         login_requirement="通常无需登录",
     ),
+    "moe.gov.cn": SourceSiteRule(
+        domain="moe.gov.cn",
+        name="教育部官网",
+        resource_method="解析列表页与正文页，提取标题、发布日期、正文段落和正文图片",
+        fallback_method="无正文配图时生成春晖学府教育资讯封面",
+        notes="适合春晖学府定时采集权威教育政策、教师培养、资助和升学相关信息。",
+        login_requirement="通常无需登录",
+    ),
 }
 
 

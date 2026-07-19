@@ -25,10 +25,15 @@ class MarkdownRenderer:
             f"date: {article.published_at.strftime('%Y-%m-%d %H:%M:%S')}",
             f"source: {article.source}",
             f"channel: {article.channel}",
-            "message_ids:",
         ]
-        for message_id in article.message_ids:
-            lines.append(f"  - {message_id}")
+        if article.message_ids:
+            lines.append("message_ids:")
+            for message_id in article.message_ids:
+                lines.append(f"  - {message_id}")
+        else:
+            lines.append("message_ids: []")
+        if article.source_id:
+            lines.append(f"source_id: {quote_yaml(article.source_id)}")
         if article.grouped_id:
             lines.append(f"grouped_id: {article.grouped_id}")
         lines.extend(

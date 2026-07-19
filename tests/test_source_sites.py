@@ -59,5 +59,14 @@ def test_source_rule_records_cls_body_screenshot_fallback():
     assert rule.login_requirement == "通常无需登录"
 
 
+def test_source_rule_records_moe_education_source():
+    rule = source_rule_for_url("http://www.moe.gov.cn/jyb_xwfb/gzdt_gzdt/")
+
+    assert rule is not None
+    assert rule.domain == "moe.gov.cn"
+    assert "教育部" in rule.name
+    assert "春晖学府" in rule.fallback_method
+
+
 def test_source_rule_returns_none_for_unknown_domain():
     assert source_rule_for_url("https://example.invalid/article") is None

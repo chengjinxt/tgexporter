@@ -7,14 +7,20 @@ from pathlib import Path
 BRAND_TEXT = "firemail 科技频道"
 
 
-def write_placeholder_png(path: Path, width: int = 1200, height: int = 630, title: str | None = None) -> None:
+def write_placeholder_png(
+    path: Path,
+    width: int = 1200,
+    height: int = 630,
+    title: str | None = None,
+    brand_text: str = BRAND_TEXT,
+) -> None:
     try:
-        write_pillow_cover(path, width=width, height=height, title=title or "科技资讯")
+        write_pillow_cover(path, width=width, height=height, title=title or "科技资讯", brand_text=brand_text)
     except Exception:
         write_raw_png(path, width=width, height=height)
 
 
-def write_pillow_cover(path: Path, width: int, height: int, title: str) -> None:
+def write_pillow_cover(path: Path, width: int, height: int, title: str, brand_text: str = BRAND_TEXT) -> None:
     from PIL import Image, ImageDraw, ImageFont
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,7 +59,7 @@ def write_pillow_cover(path: Path, width: int, height: int, title: str) -> None:
     title_font = load_font(max(28, int(min(width, height) * 0.105)))
     draw.text(
         (margin, margin),
-        BRAND_TEXT,
+        brand_text,
         font=brand_font,
         fill=(255, 255, 255, 255),
         stroke_width=max(1, width // 620),

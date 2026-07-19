@@ -16,6 +16,11 @@ author = "程锦学堂"
 [source]
 profile_dir = "runtime/source-profile"
 
+[web_sources]
+default_group = "chunhui-xuefu"
+interval_seconds = 3600
+max_articles_per_run = 1
+
 [telethon]
 enabled = false
 api_id = ""

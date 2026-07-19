@@ -33,11 +33,19 @@ class SourceConfig:
 
 
 @dataclass(frozen=True)
+class WebSourcesConfig:
+    default_group: str = "chunhui-xuefu"
+    interval_seconds: int = 3600
+    max_articles_per_run: int = 1
+
+
+@dataclass(frozen=True)
 class Config:
     telegram: TelegramConfig
     output: OutputConfig
     wechat: WechatConfig
     source: SourceConfig
+    web_sources: WebSourcesConfig
 
 
 def load_config(root: Path | None = None, config_path: Path | None = None) -> Config:
@@ -49,6 +57,7 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     output = data.get("output", {})
     wechat = data.get("wechat", {})
     source = data.get("source", {})
+    web_sources = data.get("web_sources", {})
 
     bot_token = _pick(env, "TG_BOT_TOKEN", telegram.get("bot_token", ""))
     channel = _pick(env, "TG_CHANNEL", telegram.get("channel", "TechnologyNewsSyncAssistant"))
@@ -60,6 +69,9 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     default_mode = _pick(env, "WECHAT_DEFAULT_MODE", wechat.get("default_mode", "draft"))
     author = _pick(env, "WECHAT_AUTHOR", wechat.get("author", "程锦学堂"))
     source_profile_dir = _pick(env, "SOURCE_PROFILE_DIR", source.get("profile_dir", "runtime/source-profile"))
+    web_source_group = _pick(env, "WEB_SOURCE_GROUP", web_sources.get("default_group", "chunhui-xuefu"))
+    web_source_interval = int(_pick(env, "WEB_SOURCE_INTERVAL_SECONDS", web_sources.get("interval_seconds", 3600)))
+    web_source_limit = int(_pick(env, "WEB_SOURCE_LIMIT", web_sources.get("max_articles_per_run", 1)))
 
     return Config(
         telegram=TelegramConfig(
@@ -75,6 +87,11 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
             author=author,
         ),
         source=SourceConfig(profile_dir=_resolve(root, source_profile_dir)),
+        web_sources=WebSourcesConfig(
+            default_group=web_source_group,
+            interval_seconds=web_source_interval,
+            max_articles_per_run=web_source_limit,
+        ),
     )
 
 

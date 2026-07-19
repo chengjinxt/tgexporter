@@ -72,6 +72,7 @@ class StateStore:
 
     def record_article(self, article: ArticleDraft, markdown_path: Path) -> None:
         with self._connect() as conn:
+            key = article_key(article)
             conn.execute(
                 """
                 insert or replace into articles(
@@ -80,7 +81,7 @@ class StateStore:
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    article_key(article),
+                    key,
                     article.channel,
                     article.date_key,
                     article.daily_index,
@@ -98,7 +99,7 @@ class StateStore:
                     insert or ignore into messages(channel, message_id, article_key)
                     values (?, ?, ?)
                     """,
-                    (article.channel, message_id, article_key(article)),
+                    (article.channel, message_id, key),
                 )
             for link in article.links:
                 domain = domain_from_url(link.url)
@@ -109,8 +110,39 @@ class StateStore:
                     insert or ignore into reference_domains(article_key, url, domain, name)
                     values (?, ?, ?, ?)
                     """,
-                    (article_key(article), link.url, domain, link.name),
+                    (key, link.url, domain, link.name),
                 )
+
+    def source_url_processed(self, channel: str, url: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "select 1 from source_urls where channel = ? and url = ?",
+                (channel, normalize_url(url)),
+            ).fetchone()
+            return row is not None
+
+    def article_path_by_source_url(self, channel: str, url: str) -> Path | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select markdown_path
+                from source_urls
+                where channel = ? and url = ?
+                limit 1
+                """,
+                (channel, normalize_url(url)),
+            ).fetchone()
+            return Path(row[0]) if row and row[0] else None
+
+    def record_source_url(self, channel: str, url: str, article: ArticleDraft, markdown_path: Path) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert or replace into source_urls(channel, url, article_key, markdown_path)
+                values (?, ?, ?, ?)
+                """,
+                (channel, normalize_url(url), article_key(article), str(markdown_path)),
+            )
 
     def update_article_status(self, article_path: Path, status: str, error: str | None = None) -> None:
         with self._connect() as conn:
@@ -190,11 +222,22 @@ class StateStore:
 
                 create index if not exists idx_reference_domains_domain
                 on reference_domains(domain);
+
+                create table if not exists source_urls (
+                    channel text not null,
+                    url text not null,
+                    article_key text not null,
+                    markdown_path text,
+                    created_at text not null default current_timestamp,
+                    primary key(channel, url)
+                );
                 """
             )
 
 
 def article_key(article: ArticleDraft) -> str:
+    if article.source_id:
+        return f"{article.channel}:source:{article.source_id}"
     if article.grouped_id:
         return f"{article.channel}:group:{article.grouped_id}"
     ids = "-".join(str(item) for item in article.message_ids)
@@ -207,3 +250,7 @@ def domain_from_url(url: str) -> str:
     if hostname.startswith("www."):
         hostname = hostname[4:]
     return hostname
+
+
+def normalize_url(url: str) -> str:
+    return url.strip()
