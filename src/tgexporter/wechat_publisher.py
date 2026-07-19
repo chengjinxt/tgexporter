@@ -573,6 +573,7 @@ def add_wechat_article_slot(page, index: int) -> None:
     close_wechat_search_component_dialog(page)
     page.mouse.wheel(0, -2000)
     human_pause(page, 800, 1500)
+    before_count = count_sidebar_article_cards(page)
     if click_new_article_button_in_sidebar(page):
         print(f"Adding WeChat article slot {index} via left sidebar button.", flush=True)
         human_pause(page, 1000, 2000)
@@ -580,6 +581,8 @@ def add_wechat_article_slot(page, index: int) -> None:
             human_pause(page, 1800, 3200)
         else:
             print("WeChat new article menu option not found; checking whether editor switched directly.", flush=True)
+        wait_for_sidebar_article_card_count(page, before_count + 1)
+        click_blank_sidebar_article_card(page) or click_latest_sidebar_article_card(page)
         wait_for_editor_ready(page)
         wait_for_blank_title(page, index)
         return
@@ -587,6 +590,8 @@ def add_wechat_article_slot(page, index: int) -> None:
         human_pause(page, 1000, 2000)
         if click_write_new_article_option(page):
             human_pause(page, 1800, 3200)
+        wait_for_sidebar_article_card_count(page, before_count + 1)
+        click_blank_sidebar_article_card(page) or click_latest_sidebar_article_card(page)
         wait_for_editor_ready(page)
         wait_for_blank_title(page, index)
         return
@@ -1275,6 +1280,193 @@ def click_write_new_article_option(page) -> bool:
     return click_visible_text(page, "写新文章")
 
 
+def count_sidebar_article_cards(page) -> int:
+    try:
+        return int(
+            page.evaluate(
+                """() => {
+                        const visible = (node) => {
+                            const rect = node.getBoundingClientRect();
+                            const style = window.getComputedStyle(node);
+                            return rect.width > 60 &&
+                                rect.height > 40 &&
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth &&
+                                style.visibility !== 'hidden' &&
+                                style.display !== 'none';
+                        };
+                        const cards = [...document.querySelectorAll('li, div, a')]
+                            .map((el) => {
+                                const rect = el.getBoundingClientRect();
+                                const text = (el.innerText || el.textContent || '').trim();
+                                const hasMedia = Boolean(el.querySelector('img')) ||
+                                    window.getComputedStyle(el).backgroundImage !== 'none';
+                                const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                                return {el, rect, text, hasMedia, inDialog};
+                            })
+                            .filter(({el, rect, text, hasMedia, inDialog}) =>
+                                visible(el) &&
+                                !inDialog &&
+                                rect.left >= 0 &&
+                                rect.left < 430 &&
+                                rect.right <= 470 &&
+                                rect.top > 60 &&
+                                text &&
+                                !/新建内容|历史版本|原创|广告|留言/.test(text) &&
+                                (hasMedia || text.length > 8 || text === '标题')
+                            );
+                        const centers = [];
+                        for (const item of cards) {
+                            const cy = Math.round(item.rect.top + item.rect.height / 2);
+                            if (!centers.some((other) => Math.abs(other - cy) < 8)) {
+                                centers.push(cy);
+                            }
+                        }
+                        return centers.length;
+                    }"""
+            )
+        )
+    except Exception:
+        return 0
+
+
+def wait_for_sidebar_article_card_count(page, expected_count: int, timeout_seconds: int = 12) -> bool:
+    if expected_count <= 1:
+        return True
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if count_sidebar_article_cards(page) >= expected_count:
+            return True
+        page.wait_for_timeout(500)
+    print(
+        f"WeChat sidebar article count did not reach {expected_count}; continuing with editor state check.",
+        flush=True,
+    )
+    return False
+
+
+def click_blank_sidebar_article_card(page) -> bool:
+    try:
+        point = page.evaluate(
+            """() => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const textOf = (node) => (node.innerText || node.textContent || '').replace(/\\s+/g, '');
+                    const candidates = [...document.querySelectorAll('div, li, a, span')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const text = textOf(el);
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            let clickable = el;
+                            for (let i = 0; i < 6 && clickable.parentElement; i += 1) {
+                                const parent = clickable.parentElement;
+                                const parentRect = parent.getBoundingClientRect();
+                                if (parentRect.left >= 0 &&
+                                    parentRect.left < 430 &&
+                                    parentRect.right <= 470 &&
+                                    parentRect.height >= 40 &&
+                                    parentRect.height <= 140 &&
+                                    parentRect.width >= 120) {
+                                    clickable = parent;
+                                }
+                            }
+                            const clickRect = clickable.getBoundingClientRect();
+                            return {el, rect, clickRect, text, inDialog};
+                        })
+                        .filter(({rect, text, inDialog}) =>
+                            !inDialog &&
+                            text === '标题' &&
+                            rect.left >= 0 &&
+                            rect.left < 430 &&
+                            rect.right <= 470 &&
+                            rect.top > 70
+                        )
+                        .sort((a, b) => b.rect.top - a.rect.top);
+                    if (!candidates.length) return null;
+                    const rect = candidates[0].clickRect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                }"""
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        human_pause(page, 800, 1600)
+        return True
+    except Exception:
+        return False
+
+
+def click_latest_sidebar_article_card(page) -> bool:
+    try:
+        point = page.evaluate(
+            """() => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 60 &&
+                            rect.height > 40 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const candidates = [...document.querySelectorAll('li, div, a')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const text = (el.innerText || el.textContent || '').trim();
+                            const hasMedia = Boolean(el.querySelector('img')) || style.backgroundImage !== 'none';
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            return {el, rect, text, hasMedia, inDialog};
+                        })
+                        .filter(({rect, text, hasMedia, inDialog}) =>
+                            !inDialog &&
+                            rect.left >= 0 &&
+                            rect.left < 430 &&
+                            rect.right <= 470 &&
+                            rect.top > 60 &&
+                            text &&
+                            !/新建内容|历史版本|原创|广告|留言/.test(text) &&
+                            (hasMedia || text.length > 8 || text === '标题')
+                        )
+                        .sort((a, b) => {
+                            const selectedA = /selected|active|current/.test(String(a.el.className || '')) ? 1 : 0;
+                            const selectedB = /selected|active|current/.test(String(b.el.className || '')) ? 1 : 0;
+                            if (selectedA !== selectedB) return selectedA - selectedB;
+                            return b.rect.top - a.rect.top;
+                        });
+                    if (!candidates.length) return null;
+                    const rect = candidates[0].rect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + Math.min(rect.height / 2, 60)};
+                }"""
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        human_pause(page, 800, 1500)
+        return True
+    except Exception:
+        return False
+
+
 def close_wechat_search_component_dialog(page) -> bool:
     try:
         point = page.evaluate(
@@ -1337,6 +1529,7 @@ def click_new_article_button_in_sidebar(page) -> bool:
     try:
         point = page.evaluate(
             """labels => {
+                    const normalizedLabels = labels.map((label) => label.replace(/\\s+/g, ''));
                     const visible = (node) => {
                         const rect = node.getBoundingClientRect();
                         const style = window.getComputedStyle(node);
@@ -1367,7 +1560,7 @@ def click_new_article_button_in_sidebar(page) -> bool:
                                     clickable = parent;
                                     break;
                                 }
-                                if (labels.some((label) => parentText.includes(label.replace(/\\s+/g, ''))) &&
+                                if (normalizedLabels.some((label) => parentText === label || parentText === `+${label}`) &&
                                     parentRect.left < 430 &&
                                     parentRect.right <= 460) {
                                     clickable = parent;
@@ -1377,7 +1570,7 @@ def click_new_article_button_in_sidebar(page) -> bool:
                             return {el, rect, clickRect, text, inDialog, inToolbar};
                         })
                         .filter(({rect, text, inDialog, inToolbar}) =>
-                            labels.some((label) => text.includes(label.replace(/\\s+/g, ''))) &&
+                            normalizedLabels.some((label) => text === label || text === `+${label}`) &&
                             !inDialog &&
                             !inToolbar &&
                             rect.left >= 0 &&
@@ -1388,8 +1581,8 @@ def click_new_article_button_in_sidebar(page) -> bool:
                             rect.height > 16
                         )
                         .sort((a, b) => {
-                            const aExact = labels.some((label) => a.text === label.replace(/\\s+/g, '')) ? 0 : 1;
-                            const bExact = labels.some((label) => b.text === label.replace(/\\s+/g, '')) ? 0 : 1;
+                            const aExact = normalizedLabels.some((label) => a.text === label || a.text === `+${label}`) ? 0 : 1;
+                            const bExact = normalizedLabels.some((label) => b.text === label || b.text === `+${label}`) ? 0 : 1;
                             if (aExact !== bExact) return aExact - bExact;
                             return (a.clickRect.width * a.clickRect.height) - (b.clickRect.width * b.clickRect.height);
                         });
