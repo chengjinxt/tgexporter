@@ -93,14 +93,20 @@ class TelegramCollector:
         consecutive_errors = 0
         while True:
             try:
-                paths = self.poll_once(timeout=timeout)
+                paths = self.poll_once(timeout=poll_timeout_after_transient_error(timeout, consecutive_errors))
                 consecutive_errors = 0
             except TelegramBotError as exc:
                 if not is_transient_telegram_error(exc):
                     raise
                 consecutive_errors += 1
                 delay = min(60, 5 * consecutive_errors)
-                print(f"Telegram getUpdates transient error: {exc}. Retry in {delay}s.", file=sys.stderr)
+                next_timeout = poll_timeout_after_transient_error(timeout, consecutive_errors)
+                print(
+                    f"Telegram getUpdates transient error: {exc}. "
+                    f"Retry in {delay}s with poll timeout {next_timeout}s.",
+                    file=sys.stderr,
+                )
+                print(telegram_network_hint(exc, self.proxy_url), file=sys.stderr)
                 time.sleep(delay)
                 continue
             for path in paths:
@@ -776,6 +782,31 @@ def is_transient_telegram_error(exc: TelegramBotError) -> bool:
     ]
     return any(marker in text for marker in transient_markers) and not any(
         marker in text for marker in permanent_markers
+    )
+
+
+def poll_timeout_after_transient_error(timeout: int, consecutive_errors: int) -> int:
+    if consecutive_errors <= 0:
+        return timeout
+    return min(timeout, 5)
+
+
+def telegram_network_hint(exc: TelegramBotError, proxy_url: str | None = None) -> str:
+    text = str(exc).lower()
+    proxy = proxy_url or "direct"
+    if any(marker in text for marker in ("ssl", "handshake", "unexpected_eof", "eof occurred", "read operation timed out")):
+        reason = "Telegram Bot API 的 HTTPS 连接被代理或网络中途断开"
+    elif any(marker in text for marker in ("connection refused", "connection reset", "connection aborted")):
+        reason = "代理端口或到 Telegram Bot API 的连接被拒绝/重置"
+    elif "timed out" in text or "timeout" in text:
+        reason = "Telegram Bot API 请求超时"
+    else:
+        reason = "Telegram Bot API 网络请求失败"
+    return (
+        f"排查提示：{reason}；当前代理为 {proxy}。请确认代理软件正在运行，"
+        "HTTP 代理端口可用，规则/全局模式允许 api.telegram.org。"
+        "可运行 `tgexporter doctor` 做短连接检测；如果短连接正常但 listen 仍反复报错，"
+        "程序会自动改用 5 秒短轮询重试，通常是代理长连接不稳定。"
     )
 
 

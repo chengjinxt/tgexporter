@@ -14,7 +14,9 @@ from tgexporter.collector import (
     collect_text,
     enrich_wechat_article_links,
     is_transient_telegram_error,
+    poll_timeout_after_transient_error,
     should_prompt_source_login,
+    telegram_network_hint,
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.link_enricher import PageMetadata
@@ -337,10 +339,34 @@ def test_transient_telegram_error_detects_ssl_timeout():
     assert is_transient_telegram_error(error)
 
 
+def test_transient_telegram_error_detects_unexpected_eof():
+    error = TelegramBotError(
+        "Telegram API getUpdates failed: <urlopen error [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred>"
+    )
+
+    assert is_transient_telegram_error(error)
+
+
 def test_transient_telegram_error_does_not_retry_invalid_token():
     error = TelegramBotError("Telegram API getUpdates failed: Unauthorized: invalid token")
 
     assert not is_transient_telegram_error(error)
+
+
+def test_poll_timeout_falls_back_to_short_poll_after_transient_error():
+    assert poll_timeout_after_transient_error(30, 0) == 30
+    assert poll_timeout_after_transient_error(30, 1) == 5
+    assert poll_timeout_after_transient_error(3, 1) == 3
+
+
+def test_telegram_network_hint_mentions_proxy_and_doctor():
+    error = TelegramBotError("Telegram API getUpdates failed: <urlopen error _ssl.c:983: handshake timed out>")
+
+    hint = telegram_network_hint(error, "http://127.0.0.1:7890")
+
+    assert "127.0.0.1:7890" in hint
+    assert "api.telegram.org" in hint
+    assert "tgexporter doctor" in hint
 
 
 def test_source_login_prompt_skips_public_sites():

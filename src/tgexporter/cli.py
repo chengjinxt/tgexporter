@@ -136,10 +136,12 @@ def cmd_doctor(args) -> int:
     require_bot_token(config)
     client = TelegramBotClient(config.telegram.bot_token, proxy_url=config.telegram.proxy_url)
     me = client.get_me()
+    updates = client.get_updates(timeout=2, allowed_updates=["channel_post", "edited_channel_post"])
     print(f"Bot: @{me.get('username')} ({me.get('first_name')})")
     print(f"Token: {mask_secret(config.telegram.bot_token)}")
     print(f"Channel: @{channel.lstrip('@')}")
     print(f"Proxy: {config.telegram.proxy_url or 'direct'}")
+    print(f"Bot API getUpdates short poll: ok ({len(updates)} pending update(s) visible)")
     print(f"Output: {config.output.base_dir}")
     print(f"WeChat profile: {config.wechat.profile_dir}")
     return 0
