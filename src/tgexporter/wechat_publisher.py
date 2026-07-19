@@ -22,6 +22,7 @@ MAX_WECHAT_ARTICLES = 8
 DEFAULT_HUMAN_PAUSE_MS = (900, 1800)
 MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)\s]+)\)")
 URL_ONLY_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
+NEW_ARTICLE_LABELS = ["新建内容", "添加图文", "新建图文", "新增图文"]
 
 
 @dataclass(frozen=True)
@@ -218,7 +219,7 @@ def build_preview_html(article: WechatArticle) -> str:
 def markdown_to_wechat_html(
     article: WechatArticle,
     embed_local_images: bool = False,
-    render_local_videos: bool = True,
+    render_local_videos: bool = False,
     include_title: bool = True,
     skip_duplicate_intro: bool = False,
     include_images: bool = True,
@@ -569,17 +570,11 @@ def fill_current_wechat_article(page, article: WechatArticle, index: int) -> Non
 
 
 def add_wechat_article_slot(page, index: int) -> None:
+    close_wechat_search_component_dialog(page)
     page.mouse.wheel(0, -2000)
     human_pause(page, 800, 1500)
-    for selector in ["text=新建内容", "text=添加图文", "text=添加", "text=新增"]:
-        button = first_visible_locator(page, selector)
-        if button is None:
-            continue
-        try:
-            print(f"Adding WeChat article slot {index} via selector: {selector}", flush=True)
-            button.click(timeout=5000)
-        except Exception:
-            continue
+    if click_new_article_button_in_sidebar(page):
+        print(f"Adding WeChat article slot {index} via left sidebar button.", flush=True)
         human_pause(page, 1000, 2000)
         if click_write_new_article_option(page):
             human_pause(page, 1800, 3200)
@@ -1280,20 +1275,158 @@ def click_write_new_article_option(page) -> bool:
     return click_visible_text(page, "写新文章")
 
 
-def click_new_article_button_by_text(page) -> bool:
+def close_wechat_search_component_dialog(page) -> bool:
     try:
         point = page.evaluate(
             """() => {
-                    const labels = ['新建内容', '添加图文', '添加', '新增'];
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none';
+                    };
+                    const dialogs = [...document.querySelectorAll('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp')]
+                        .filter((node) => visible(node) && /插入搜索组件|搜索词|推荐搜索|添加关键词/.test(node.innerText || node.textContent || ''));
+                    if (!dialogs.length) return null;
+                    const dialog = dialogs[0];
+                    const closeCandidates = [...dialog.querySelectorAll('button, a, i, span, div')]
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const text = (el.innerText || el.textContent || '').trim();
+                            const cls = String(el.className || '');
+                            return {el, rect, area: rect.width * rect.height, style, text, cls};
+                        })
+                        .filter(({rect, area, style, text, cls}) =>
+                            area > 0 &&
+                            area < 4000 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none' &&
+                            (/^(×|x)$/i.test(text) || /close|cancel|关闭/.test(cls + text))
+                        )
+                        .sort((a, b) => b.rect.left - a.rect.left);
+                    if (closeCandidates.length) {
+                        const rect = closeCandidates[0].rect;
+                        return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                    }
+                    const rect = dialog.getBoundingClientRect();
+                    return {x: rect.right - 28, y: rect.top + 28};
+                }"""
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        human_pause(page, 500, 1000)
+        return True
+    except Exception:
+        return False
+
+
+def click_new_article_button_in_sidebar(page) -> bool:
+    try:
+        point = page.evaluate(
+            """labels => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const textOf = (node) => (node.innerText || node.textContent || '').replace(/\\s+/g, '');
+                    const nodes = [...document.querySelectorAll('button, a, span, div, li')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const text = textOf(el);
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            const inToolbar = Boolean(el.closest('[role="toolbar"], .toolbar, [class*="toolbar"], [class*="tool_bar"], [class*="edui-toolbar"]'));
+                            let clickable = el;
+                            for (let i = 0; i < 5 && clickable.parentElement; i += 1) {
+                                const parent = clickable.parentElement;
+                                const parentText = textOf(parent);
+                                const parentRect = parent.getBoundingClientRect();
+                                if (/^(BUTTON|A|LI)$/.test(parent.tagName) || parent.getAttribute('role') === 'button') {
+                                    clickable = parent;
+                                    break;
+                                }
+                                if (labels.some((label) => parentText.includes(label.replace(/\\s+/g, ''))) &&
+                                    parentRect.left < 430 &&
+                                    parentRect.right <= 460) {
+                                    clickable = parent;
+                                }
+                            }
+                            const clickRect = clickable.getBoundingClientRect();
+                            return {el, rect, clickRect, text, inDialog, inToolbar};
+                        })
+                        .filter(({rect, text, inDialog, inToolbar}) =>
+                            labels.some((label) => text.includes(label.replace(/\\s+/g, ''))) &&
+                            !inDialog &&
+                            !inToolbar &&
+                            rect.left >= 0 &&
+                            rect.left < 430 &&
+                            rect.right <= 460 &&
+                            rect.top > 120 &&
+                            rect.width > 40 &&
+                            rect.height > 16
+                        )
+                        .sort((a, b) => {
+                            const aExact = labels.some((label) => a.text === label.replace(/\\s+/g, '')) ? 0 : 1;
+                            const bExact = labels.some((label) => b.text === label.replace(/\\s+/g, '')) ? 0 : 1;
+                            if (aExact !== bExact) return aExact - bExact;
+                            return (a.clickRect.width * a.clickRect.height) - (b.clickRect.width * b.clickRect.height);
+                        });
+                    if (!nodes.length) return null;
+                    const rect = nodes[0].clickRect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                }""",
+            NEW_ARTICLE_LABELS,
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        return True
+    except Exception:
+        return False
+
+
+def click_new_article_button_by_text(page) -> bool:
+    try:
+        point = page.evaluate(
+            """labels => {
                     const elements = [...document.querySelectorAll('button, a, span, div, li')]
                         .map((el) => {
                             const rect = el.getBoundingClientRect();
                             const style = window.getComputedStyle(el);
                             const text = (el.innerText || el.textContent || '').trim();
-                            return {el, rect, area: rect.width * rect.height, style, text};
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            const inToolbar = Boolean(el.closest('[role="toolbar"], .toolbar, [class*="toolbar"], [class*="tool_bar"], [class*="edui-toolbar"]'));
+                            return {el, rect, area: rect.width * rect.height, style, text, inDialog, inToolbar};
                         })
-                        .filter(({text, rect, area, style}) =>
+                        .filter(({text, rect, area, style, inDialog, inToolbar}) =>
                             labels.some((label) => text.includes(label)) &&
+                            !inDialog &&
+                            !inToolbar &&
+                            rect.left < 430 &&
+                            rect.right <= 460 &&
+                            rect.top > 120 &&
                             area > 0 &&
                             rect.bottom > 0 &&
                             rect.right > 0 &&
@@ -1307,7 +1440,8 @@ def click_new_article_button_by_text(page) -> bool:
                     if (!elements.length) return null;
                     const rect = elements[0].rect;
                     return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
-                }"""
+                }""",
+            NEW_ARTICLE_LABELS,
         )
         if not point:
             return False
