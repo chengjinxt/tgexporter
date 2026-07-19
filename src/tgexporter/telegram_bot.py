@@ -39,7 +39,8 @@ class TelegramBotClient:
             params["offset"] = offset
         if allowed_updates:
             params["allowed_updates"] = json.dumps(allowed_updates, ensure_ascii=False)
-        result = self._request_json("getUpdates", params)
+        request_timeout = max(90, timeout + 60)
+        result = self._request_json("getUpdates", params, timeout=request_timeout)
         if not isinstance(result, list):
             raise TelegramBotError("Unexpected getUpdates response.")
         return result
@@ -64,7 +65,7 @@ class TelegramBotClient:
                     time.sleep(attempt)
         raise TelegramBotError(f"Failed to download Telegram file to {destination}: {last_error}") from last_error
 
-    def _request_json(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    def _request_json(self, method: str, params: dict[str, Any] | None = None, timeout: int = 90) -> Any:
         body = urllib.parse.urlencode(params or {}).encode("utf-8")
         request = urllib.request.Request(
             f"{self.api_base}/{method}",
@@ -72,12 +73,12 @@ class TelegramBotClient:
             headers={"User-Agent": "tgexporter/0.1"},
         )
         try:
-            with self.opener.open(request, timeout=90) as response:
+            with self.opener.open(request, timeout=timeout) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise TelegramBotError(f"Telegram API {method} failed: {detail}") from exc
-        except (urllib.error.URLError, json.JSONDecodeError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             raise TelegramBotError(f"Telegram API {method} failed: {exc}") from exc
 
         if not payload.get("ok"):
