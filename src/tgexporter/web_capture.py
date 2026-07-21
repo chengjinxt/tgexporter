@@ -28,6 +28,34 @@ DESKTOP_USER_AGENT = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
+IMAGE_CANDIDATE_SCRIPT = """
+(limit) => {
+    const ignored = /(logo|avatar|qrcode|qr-code|icon|sprite|blank|placeholder|weixin|wechat|ad-|ads|advert|banner|promo|sponsor)/i;
+    const h1 = document.querySelector('h1');
+    const h1Box = h1 ? h1.getBoundingClientRect() : null;
+    const h1Bottom = h1Box ? h1Box.bottom + window.scrollY : 0;
+    const candidates = Array.from(document.images).map((img, index) => {
+        const rect = img.getBoundingClientRect();
+        const src = img.currentSrc || img.src || '';
+        const text = `${src} ${img.alt || ''} ${img.className || ''} ${img.id || ''}`;
+        const naturalWidth = img.naturalWidth || rect.width;
+        const naturalHeight = img.naturalHeight || rect.height;
+        const area = naturalWidth * naturalHeight;
+        const visible = rect.width >= 220 && rect.height >= 120 && area >= 100000;
+        const top = rect.top + window.scrollY;
+        const titleDistance = h1Bottom ? Math.abs(top - h1Bottom) : Math.min(top, 3000);
+        const articleBoost = !h1Bottom || top >= h1Bottom - 160 ? 900000 : 0;
+        const tooHighPenalty = h1Bottom && top < h1Bottom - 220 ? 900000 : 0;
+        const dataPenalty = src.startsWith('data:') ? 500000 : 0;
+        const gifPenalty = /(?:\\.gif|%2egif|gif[?&]|format=gif)/i.test(src) ? 900000 : 0;
+        const score = area + articleBoost - titleDistance * 700 - tooHighPenalty - dataPenalty - gifPenalty;
+        return { img, index, src, area, top, visible, ignored: ignored.test(text), score };
+    }).filter(item => item.visible && !item.ignored && item.src && !item.src.startsWith('data:'));
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates.slice(0, limit || 8).map(item => item.src);
+}
+"""
+
 
 def capture_source_image(
     url: str,
@@ -55,6 +83,7 @@ def capture_source_image(
                 except Exception:
                     pass
                 dismiss_common_overlays(page)
+                load_lazy_media(page)
                 if is_blocked_page(page):
                     return False
                 if screenshot_largest_image(page, destination):
@@ -65,6 +94,41 @@ def capture_source_image(
     except Exception:
         destination.unlink(missing_ok=True)
         return False
+
+
+def extract_source_image_urls(
+    url: str,
+    timeout_ms: int = 30000,
+    profile_dir: Path | None = None,
+    limit: int = 8,
+) -> list[str]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    try:
+        with sync_playwright() as playwright:
+            context, close_context = create_browser_context(playwright, headless=True, profile_dir=profile_dir)
+            page = context.new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
+            page.set_default_timeout(timeout_ms)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=6000)
+                except Exception:
+                    pass
+                dismiss_common_overlays(page)
+                load_lazy_media(page)
+                if is_blocked_page(page):
+                    return []
+                urls = page.evaluate(IMAGE_CANDIDATE_SCRIPT, limit)
+                return [item for item in urls if isinstance(item, str)]
+            finally:
+                close_context()
+    except Exception:
+        return []
 
 
 def open_source_login_browser(url: str, profile_dir: Path, timeout_seconds: int = 600) -> None:
@@ -121,6 +185,22 @@ def wait_for_enter_or_timeout(page, timeout_seconds: int) -> None:
             return
 
 
+def load_lazy_media(page) -> None:
+    try:
+        height = int(page.evaluate("Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)") or 0)
+    except Exception:
+        return
+    positions = [0, 450, 900, 1400, 2200, 3200]
+    for y in positions:
+        if height and y > height + 300:
+            break
+        try:
+            page.evaluate("(y) => window.scrollTo(0, y)", y)
+            page.wait_for_timeout(650)
+        except Exception:
+            break
+
+
 def dismiss_common_overlays(page) -> None:
     button_texts = (
         "Accept",
@@ -171,38 +251,19 @@ def is_blocked_page(page) -> bool:
 
 
 def screenshot_largest_image(page, destination: Path) -> bool:
-    candidate = page.evaluate(
-        """
-        () => {
-            const ignored = /(logo|avatar|qrcode|qr-code|icon|sprite|blank|placeholder|weixin|wechat|ad-|ads|advert|banner|promo|sponsor)/i;
-            const h1 = document.querySelector('h1');
-            const h1Box = h1 ? h1.getBoundingClientRect() : null;
-            const h1Bottom = h1Box ? h1Box.bottom + window.scrollY : 0;
-            const candidates = Array.from(document.images).map((img, index) => {
-                const rect = img.getBoundingClientRect();
-                const src = img.currentSrc || img.src || '';
-                const text = `${src} ${img.alt || ''} ${img.className || ''} ${img.id || ''}`;
-                const naturalWidth = img.naturalWidth || rect.width;
-                const naturalHeight = img.naturalHeight || rect.height;
-                const area = naturalWidth * naturalHeight;
-                const visible = rect.width >= 260 && rect.height >= 150 && area >= 120000;
-                const top = rect.top + window.scrollY;
-                const titleDistance = h1Bottom ? Math.abs(top - h1Bottom) : Math.min(top, 3000);
-                const articleBoost = !h1Bottom || top >= h1Bottom - 120 ? 800000 : 0;
-                const tooHighPenalty = h1Bottom && top < h1Bottom - 180 ? 900000 : 0;
-                const score = area + articleBoost - titleDistance * 60 - tooHighPenalty;
-                return { img, index, src, area, top, visible, ignored: ignored.test(text), score };
-            }).filter(item => item.visible && !item.ignored && item.src);
-            candidates.sort((a, b) => b.score - a.score);
-            document.querySelectorAll('[data-tgexporter-capture]').forEach(node => node.removeAttribute('data-tgexporter-capture'));
-            if (!candidates.length) return null;
-            candidates[0].img.setAttribute('data-tgexporter-capture', 'image');
-            return { src: candidates[0].src, area: candidates[0].area };
-        }
-        """
-    )
-    if not candidate:
+    candidate_urls = page.evaluate(IMAGE_CANDIDATE_SCRIPT, 1)
+    if not candidate_urls:
         return False
+    page.evaluate(
+        """
+        (src) => {
+            document.querySelectorAll('[data-tgexporter-capture]').forEach(node => node.removeAttribute('data-tgexporter-capture'));
+            const target = Array.from(document.images).find(img => (img.currentSrc || img.src || '') === src);
+            if (target) target.setAttribute('data-tgexporter-capture', 'image');
+        }
+        """,
+        candidate_urls[0],
+    )
     locator = page.locator('[data-tgexporter-capture="image"]').first
     try:
         locator.scroll_into_view_if_needed(timeout=5000)

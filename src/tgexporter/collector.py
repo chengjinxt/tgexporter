@@ -30,7 +30,7 @@ from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 from .text_filters import is_channel_promo_line, normalize_text
 from .video_cover import create_video_cover
-from .web_capture import capture_source_image
+from .web_capture import capture_source_image, extract_source_image_urls
 
 BOT_API_DOWNLOAD_LIMIT = 20_000_000
 MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)]\((?P<url>https?://[^)\s]+)\)")
@@ -42,6 +42,7 @@ WECHAT_BARE_LINK_LINE_RE = re.compile(
     r"^(?P<url>https?://mp\.weixin\.qq\.com/[^\s)）]+)\s*$",
     re.IGNORECASE,
 )
+BROWSER_IMAGE_SOURCE_DOMAINS = {"fifa.com", "axios.com"}
 
 
 class TelegramCollector:
@@ -205,6 +206,8 @@ class TelegramCollector:
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_link_images(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
+            article.media.extend(self._download_browser_link_images(article, date_dir))
+        if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._capture_link_image(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._download_google_image(article, date_dir))
@@ -337,6 +340,41 @@ class TelegramCollector:
                     title=f"网页截图：{link.name}",
                 )
             ]
+        return []
+
+    def _download_browser_link_images(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
+        seen: set[str] = set()
+        for link in article.links:
+            rule = source_rule_for_url(link.url)
+            if rule is None or rule.domain not in BROWSER_IMAGE_SOURCE_DOMAINS:
+                continue
+            for image_url in extract_source_image_urls(link.url, profile_dir=self.source_profile_dir):
+                if image_url in seen:
+                    continue
+                seen.add(image_url)
+                filename = media_filename(
+                    article.date_key,
+                    article.daily_index,
+                    "PIC",
+                    1,
+                    article.title,
+                    extension_from_url(image_url, ".jpg"),
+                )
+                destination = date_dir / filename
+                if not download_web_file(image_url, destination, proxy_url=self.proxy_url, referer=link.url):
+                    continue
+                if not is_suitable_article_image(destination):
+                    destination.unlink(missing_ok=True)
+                    continue
+                return [
+                    MediaAsset(
+                        kind="image",
+                        filename=filename,
+                        path=destination,
+                        source="web_browser_image",
+                        title=link.name,
+                    )
+                ]
         return []
 
     def _warn_source_login_if_needed(self, link: LinkRef) -> None:
@@ -785,7 +823,14 @@ def extension_from_url(url: str, fallback: str) -> str:
 
 
 def download_web_file(url: str, destination: Path, proxy_url: str | None = None, referer: str | None = None) -> bool:
-    headers = {"User-Agent": "Mozilla/5.0 tgexporter/0.1"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5",
+    }
     if referer:
         headers["Referer"] = referer
     request = urllib.request.Request(url, headers=headers)

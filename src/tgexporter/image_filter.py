@@ -8,9 +8,9 @@ LOW_DETAIL_UNIQUE_GRAY_LEVELS = 16
 
 
 def is_suitable_article_image(path: Path) -> bool:
-    size = read_image_size(path)
+    size = read_image_size(path) or read_pillow_image_size(path)
     if size is None:
-        return path.stat().st_size >= 50_000
+        return False
     width, height = size
     if width < 300 or height < 160:
         return False
@@ -34,6 +34,7 @@ def is_low_information_image(path: Path) -> bool:
         with Image.open(path) as image:
             image = image.convert("RGB")
             image.thumbnail((96, 96))
+            rgb_pixels = list(image.getdata())
             gray = image.convert("L")
             width, height = gray.size
             pixels = list(gray.getdata())
@@ -46,21 +47,48 @@ def is_low_information_image(path: Path) -> bool:
         return True
 
     total_delta = 0
+    color_delta = 0
     comparisons = 0
     for y in range(height):
         row_offset = y * width
         for x in range(width):
             current = pixels[row_offset + x]
+            current_rgb = rgb_pixels[row_offset + x]
             if x + 1 < width:
                 total_delta += abs(current - pixels[row_offset + x + 1])
+                color_delta += sum(abs(current_rgb[index] - rgb_pixels[row_offset + x + 1][index]) for index in range(3))
                 comparisons += 1
             if y + 1 < height:
                 total_delta += abs(current - pixels[row_offset + width + x])
+                color_delta += sum(abs(current_rgb[index] - rgb_pixels[row_offset + width + x][index]) for index in range(3))
                 comparisons += 1
 
     if not comparisons:
         return True
-    return (total_delta / comparisons) < LOW_DETAIL_EDGE_THRESHOLD
+    gray_edge = total_delta / comparisons
+    color_edge = color_delta / comparisons
+    if gray_edge >= LOW_DETAIL_EDGE_THRESHOLD:
+        return False
+    channel_ranges = []
+    for index in range(3):
+        values = [pixel[index] for pixel in rgb_pixels]
+        channel_ranges.append(max(values) - min(values))
+    if len(set(rgb_pixels)) >= 256 and color_edge >= 4.5 and sum(channel_ranges) >= 120:
+        return False
+    return True
+
+
+def read_pillow_image_size(path: Path) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+
+    try:
+        with Image.open(path) as image:
+            return image.size
+    except OSError:
+        return None
 
 
 def read_image_size(path: Path) -> tuple[int, int] | None:

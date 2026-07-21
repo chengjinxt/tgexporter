@@ -79,6 +79,22 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         fallback_method="Google 图片搜索同标题相似配图",
         notes="新浪系页面可能有登录、跳转或防盗链，下载图片时优先携带 Referer。",
     ),
+    "fifa.com": SourceSiteRule(
+        domain="fifa.com",
+        name="FIFA",
+        resource_method="浏览器渲染后提取正文图片 URL，再带 Referer 下载 digitalhub.fifa.com 原图",
+        fallback_method="浏览器截取正文大图；仍失败才进入 Google 图片搜索",
+        notes="FIFA 文章首屏 HTML 可能没有 og:image 或 img，需要等待前端渲染并滚动触发懒加载。",
+        login_requirement="通常无需登录",
+    ),
+    "axios.com": SourceSiteRule(
+        domain="axios.com",
+        name="Axios",
+        resource_method="浏览器渲染后提取正文主图 URL，再带 Referer 下载 images.axios.com 图片",
+        fallback_method="浏览器截取正文主图；仍失败才进入 Google 图片搜索",
+        notes="Axios 匿名 HTTP 可能返回 403，但 Playwright 渲染页可读取正文图片。",
+        login_requirement="通常无需登录",
+    ),
     "x.com": SourceSiteRule(
         domain="x.com",
         name="X / Twitter",

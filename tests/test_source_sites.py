@@ -59,6 +59,26 @@ def test_source_rule_records_cls_body_screenshot_fallback():
     assert rule.login_requirement == "通常无需登录"
 
 
+def test_source_rule_records_fifa_lazy_image_strategy():
+    rule = source_rule_for_url(
+        "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights"
+    )
+
+    assert rule is not None
+    assert rule.domain == "fifa.com"
+    assert "digitalhub.fifa.com" in rule.resource_method
+    assert "懒加载" in rule.notes
+
+
+def test_source_rule_records_axios_browser_image_strategy():
+    rule = source_rule_for_url("https://www.axios.com/2026/07/20/ai-us-china-open-source-kimi")
+
+    assert rule is not None
+    assert rule.domain == "axios.com"
+    assert "images.axios.com" in rule.resource_method
+    assert "403" in rule.notes
+
+
 def test_source_rule_records_moe_education_source():
     rule = source_rule_for_url("http://www.moe.gov.cn/jyb_xwfb/gzdt_gzdt/")
 

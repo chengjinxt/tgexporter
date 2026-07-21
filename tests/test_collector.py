@@ -368,6 +368,59 @@ def test_capture_link_image_uses_web_screenshot_when_link_images_fail(tmp_path: 
     assert assets[0].filename == "20260716_009_PIC_001_正文截图配图文章.png"
 
 
+def test_download_browser_link_images_uses_dynamic_source_image(tmp_path: Path, monkeypatch):
+    captured: list[tuple[str, str | None]] = []
+
+    def fake_extract(url, timeout_ms=30000, profile_dir=None, limit=8):
+        assert "fifa.com" in url
+        return ["https://digitalhub.fifa.com/transform/example/Ferran-Torres?quality=75"]
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        captured.append((url, referer))
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"article-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "extract_source_image_urls", fake_extract)
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 20, tzinfo=UTC),
+        date_key="20260720",
+        daily_index=1,
+        title="西班牙加时 1 比 0 阿根廷夺冠",
+        text="正文",
+        links=[
+            LinkRef(
+                name="FIFA",
+                url="https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
+            )
+        ],
+    )
+
+    assets = collector._download_browser_link_images(article, tmp_path / "发布内容" / "20260720")
+
+    assert len(assets) == 1
+    assert assets[0].source == "web_browser_image"
+    assert assets[0].filename == "20260720_001_PIC_001_西班牙加时 1 比 0 阿根廷夺冠.jpg"
+    assert captured == [
+        (
+            "https://digitalhub.fifa.com/transform/example/Ferran-Torres?quality=75",
+            "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
+        )
+    ]
+
+
 def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):
     collector = TelegramCollector(
         client=FakeBotClient(),
