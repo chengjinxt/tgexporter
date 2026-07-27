@@ -42,7 +42,7 @@ WECHAT_BARE_LINK_LINE_RE = re.compile(
     r"^(?P<url>https?://mp\.weixin\.qq\.com/[^\s)）]+)\s*$",
     re.IGNORECASE,
 )
-BROWSER_IMAGE_SOURCE_DOMAINS = {"fifa.com", "axios.com"}
+BROWSER_IMAGE_SOURCE_DOMAINS = {"fifa.com", "axios.com", "theinformation.com", "reuters.com"}
 
 
 class TelegramCollector:

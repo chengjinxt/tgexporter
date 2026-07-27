@@ -48,6 +48,18 @@ def test_source_rule_records_theinformation_subscription_requirement():
     assert rule is not None
     assert rule.domain == "theinformation.com"
     assert "订阅" in rule.login_requirement
+    assert "tii.imgix.net" in rule.resource_method
+
+
+def test_source_rule_records_reuters_browser_image_strategy():
+    rule = source_rule_for_url(
+        "https://www.reuters.com/world/china/china-begins-making-homegrown-duv-chipmaking-tools-information-reports-2026-07-27/"
+    )
+
+    assert rule is not None
+    assert rule.domain == "reuters.com"
+    assert "正文新闻图 URL" in rule.resource_method
+    assert "401" in rule.notes
 
 
 def test_source_rule_records_cls_body_screenshot_fallback():

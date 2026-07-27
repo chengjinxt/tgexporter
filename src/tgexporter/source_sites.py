@@ -66,9 +66,9 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "reuters.com": SourceSiteRule(
         domain="reuters.com",
         name="Reuters",
-        resource_method="OpenGraph / 正文 img",
+        resource_method="OpenGraph / 正文 img；失败时浏览器渲染后提取正文新闻图 URL 下载",
         fallback_method="浏览器截图或 Google 图片搜索",
-        notes="页面结构可能随地区和订阅提示变化。",
+        notes="页面结构可能随地区和订阅提示变化；遇到空白页、401 或访问受限时需要 source-login 完成人机验证。",
         login_requirement="可能需要人机验证",
         login_hint="如果抓到 Reuters 访问受限页，先运行 source-login 完成人机验证。",
     ),
@@ -116,9 +116,9 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "theinformation.com": SourceSiteRule(
         domain="theinformation.com",
         name="The Information",
-        resource_method="浏览器关闭订阅弹窗后截取新闻主图",
+        resource_method="浏览器关闭订阅弹窗后提取 tii.imgix.net 新闻主图 URL 下载",
         fallback_method="截图文章正文区域或 Google 图片搜索同标题相似配图",
-        notes="页面常见订阅弹窗或付费墙，需先关闭弹窗再取图。",
+        notes="页面常见订阅弹窗或付费墙，需先关闭弹窗再取图；普通 HTTP 元数据可能为空。",
         login_requirement="可能需要登录或订阅",
         login_hint="如果只能看到订阅弹窗或付费墙，先运行 source-login 登录 The Information。",
     ),

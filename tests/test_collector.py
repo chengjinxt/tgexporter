@@ -372,8 +372,9 @@ def test_download_browser_link_images_uses_dynamic_source_image(tmp_path: Path, 
     captured: list[tuple[str, str | None]] = []
 
     def fake_extract(url, timeout_ms=30000, profile_dir=None, limit=8):
-        assert "fifa.com" in url
-        return ["https://digitalhub.fifa.com/transform/example/Ferran-Torres?quality=75"]
+        if "theinformation.com" in url:
+            return ["https://tii.imgix.net/production/articles/17521/duv.png?auto=compress&fit=crop&w=1200"]
+        raise AssertionError(f"unexpected url: {url}")
 
     def fake_download(url, destination, proxy_url=None, referer=None):
         captured.append((url, referer))
@@ -398,12 +399,12 @@ def test_download_browser_link_images_uses_dynamic_source_image(tmp_path: Path, 
         published_at=datetime(2026, 7, 20, tzinfo=UTC),
         date_key="20260720",
         daily_index=1,
-        title="西班牙加时 1 比 0 阿根廷夺冠",
+        title="中国开始量产国产 DUV 光刻机 今年目标生产约 5 台",
         text="正文",
         links=[
             LinkRef(
-                name="FIFA",
-                url="https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
+                name="The Information",
+                url="https://www.theinformation.com/articles/china-starts-mass-producing-homegrown-duv-chipmaking-tools-advance-local-chip-industry",
             )
         ],
     )
@@ -412,13 +413,57 @@ def test_download_browser_link_images_uses_dynamic_source_image(tmp_path: Path, 
 
     assert len(assets) == 1
     assert assets[0].source == "web_browser_image"
-    assert assets[0].filename == "20260720_001_PIC_001_西班牙加时 1 比 0 阿根廷夺冠.jpg"
+    assert assets[0].filename == "20260720_001_PIC_001_中国开始量产国产 DUV 光刻机 今年目标生产约 5 台.png"
     assert captured == [
         (
-            "https://digitalhub.fifa.com/transform/example/Ferran-Torres?quality=75",
-            "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
+            "https://tii.imgix.net/production/articles/17521/duv.png?auto=compress&fit=crop&w=1200",
+            "https://www.theinformation.com/articles/china-starts-mass-producing-homegrown-duv-chipmaking-tools-advance-local-chip-industry",
         )
     ]
+
+
+def test_download_browser_link_images_includes_reuters_domain(tmp_path: Path, monkeypatch):
+    def fake_extract(url, timeout_ms=30000, profile_dir=None, limit=8):
+        assert "reuters.com" in url
+        return ["https://www.reuters.com/resizer/example/chipmaking.jpg"]
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"reuters-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "extract_source_image_urls", fake_extract)
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 20, tzinfo=UTC),
+        date_key="20260720",
+        daily_index=2,
+        title="中国开始量产国产 DUV 光刻机 今年目标生产约 5 台",
+        text="正文",
+        links=[
+            LinkRef(
+                name="Reuters",
+                url="https://www.reuters.com/world/china/china-begins-making-homegrown-duv-chipmaking-tools-information-reports-2026-07-27/",
+            )
+        ],
+    )
+
+    assets = collector._download_browser_link_images(article, tmp_path / "发布内容" / "20260720")
+
+    assert len(assets) == 1
+    assert assets[0].source == "web_browser_image"
+    assert assets[0].filename == "20260720_002_PIC_001_中国开始量产国产 DUV 光刻机 今年目标生产约 5 台.jpg"
 
 
 def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):
