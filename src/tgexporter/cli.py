@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .collector import TelegramCollector, is_transient_telegram_error, telegram_network_hint
 from .config import load_config, mask_secret, require_bot_token
+from .draft_runner import DraftRunOptions, create_daily_draft_runner
 from .markdown_renderer import MarkdownRenderer
 from .source_sites import source_rule_for_url
 from .state import StateStore
@@ -23,6 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
+    if not getattr(args, "command", None):
+        if not getattr(args, "one_click_draft", False):
+            parser.error("a command is required unless --draft is used")
+        args.func = cmd_draft
     try:
         return int(args.func(args))
     except KeyboardInterrupt:
@@ -42,7 +47,19 @@ def configure_stdio() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tgexporter")
     parser.add_argument("--root", type=Path, default=default_root(), help="Project root directory.")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    parser.add_argument(
+        "--draft",
+        dest="one_click_draft",
+        action="store_true",
+        help="Run all-day Telegram listener and save WeChat drafts in batches of 8, with a 23:00 daily flush.",
+    )
+    parser.add_argument(
+        "--draft-check-interval",
+        type=int,
+        default=30,
+        help=argparse.SUPPRESS,
+    )
+    subparsers = parser.add_subparsers(dest="command")
 
     doctor = subparsers.add_parser("doctor", help="Check local config and Telegram bot token.")
     add_channel_argument(doctor)
@@ -269,6 +286,26 @@ def cmd_run(args) -> int:
             print("No new channel posts.")
         return 0
     collector.listen_forever(timeout=timeout, on_article=on_article)
+    return 0
+
+
+def cmd_draft(args) -> int:
+    collector, config = build_collector(args.root, save_dir=None)
+    runner = create_daily_draft_runner(
+        collector=collector,
+        output_base_dir=config.output.base_dir,
+        wechat_profile_dir=config.wechat.profile_dir,
+        timezone=config.output.timezone,
+        options=DraftRunOptions(
+            poll_timeout_seconds=config.telegram.poll_timeout_seconds,
+            check_interval_seconds=max(1, int(args.draft_check_interval)),
+            daily_flush_hour=23,
+            login_timeout_seconds=180,
+            review_timeout_seconds=0,
+            headless=False,
+        ),
+    )
+    runner.run_forever()
     return 0
 
 

@@ -1,3 +1,6 @@
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from tgexporter import cli as cli_module
@@ -9,6 +12,7 @@ from tgexporter.cli import (
     next_batch_index,
     resolve_publish_articles,
 )
+from tgexporter.draft_runner import DailyDraftRunner, DraftRunOptions
 from tgexporter.wechat_publisher import (
     build_wechat_body_items,
     clean_wechat_title,
@@ -16,6 +20,26 @@ from tgexporter.wechat_publisher import (
     parse_markdown_article,
     validate_wechat_article_count,
 )
+
+
+class FakeDraftPublisher:
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    def try_auto_fill_many(
+        self,
+        article_paths,
+        headless=False,
+        login_timeout_seconds=180,
+        review_timeout_seconds=0,
+    ):
+        self.batches.append([path.name for path in article_paths])
+        return article_paths[0].with_suffix(".html")
+
+
+def write_article(path, image_name=None):
+    image_block = f"\n![cover]({image_name})\n" if image_name else ""
+    path.write_text(f"# {path.stem}\n{image_block}\n正文", encoding="utf-8")
 
 
 def test_wechat_preview_converts_markdown_assets(tmp_path):
@@ -262,6 +286,13 @@ def test_stats_domains_accepts_typo_alias():
     assert args.func == cli_module.cmd_stats_domains
 
 
+def test_top_level_draft_flag_parses_without_subcommand():
+    args = build_parser().parse_args(["--draft"])
+
+    assert args.one_click_draft is True
+    assert args.command is None
+
+
 def test_source_login_command_parses_url_and_timeout():
     args = build_parser().parse_args(
         ["source-login", "--url", "https://x.com/SpaceXAI/status/1", "--timeout", "1"]
@@ -318,3 +349,50 @@ def test_clean_wechat_title_removes_icon_characters():
     assert clean_wechat_title("顶尖 AI 企业安全评级普遍偏低 榜首 Anthropic 仅获 C+") == (
         "顶尖 AI 企业安全评级普遍偏低 榜首 Anthropic 仅获 C+"
     )
+
+
+def test_daily_draft_runner_publishes_full_batches_before_deadline(tmp_path):
+    date_dir = tmp_path / "发布内容" / "20260728"
+    date_dir.mkdir(parents=True)
+    for index in range(9):
+        write_article(date_dir / f"{index + 1:03d}-article.md")
+    publisher = FakeDraftPublisher()
+    runner = DailyDraftRunner(
+        collector=object(),
+        publisher=publisher,
+        output_base_dir=tmp_path / "发布内容",
+        options=DraftRunOptions(poll_timeout_seconds=1),
+    )
+
+    runner.publish_due_batches(datetime(2026, 7, 28, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert len(publisher.batches) == 1
+    assert len(publisher.batches[0]) == 8
+    assert len(list((date_dir / "第1批").glob("*.md"))) == 8
+    assert [path.name for path in date_dir.glob("*.md")] == ["009-article.md"]
+
+
+def test_daily_draft_runner_flushes_pending_articles_at_23(tmp_path):
+    date_dir = tmp_path / "发布内容" / "20260728"
+    date_dir.mkdir(parents=True)
+    image = date_dir / "001-image.jpg"
+    image.write_bytes(b"image")
+    write_article(date_dir / "001-article.md", image.name)
+    write_article(date_dir / "002-article.md")
+    publisher = FakeDraftPublisher()
+    runner = DailyDraftRunner(
+        collector=object(),
+        publisher=publisher,
+        output_base_dir=tmp_path / "发布内容",
+        options=DraftRunOptions(poll_timeout_seconds=1),
+    )
+
+    runner.publish_due_batches(datetime(2026, 7, 28, 23, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert publisher.batches == [["001-article.md", "002-article.md"]]
+    assert sorted(path.name for path in (date_dir / "第1批").iterdir()) == [
+        "001-article.md",
+        "001-image.jpg",
+        "002-article.md",
+    ]
+    assert list(date_dir.glob("*.md")) == []
