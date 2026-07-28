@@ -56,9 +56,11 @@ class DailyDraftRunner:
     def run_forever(self) -> None:
         self.output_base_dir.mkdir(parents=True, exist_ok=True)
         consecutive_errors = 0
+        startup_now = datetime.now(self.timezone)
         print(
             "Draft runner started. "
-            f"Output: {self.output_base_dir}; batch size: {MAX_WECHAT_ARTICLES}; "
+            f"Output: {self.output_base_dir}; today only: {self.today_dir(startup_now)}; "
+            f"batch size: {MAX_WECHAT_ARTICLES}; "
             f"daily flush: {self.options.daily_flush_hour:02d}:00.",
             flush=True,
         )
@@ -97,23 +99,17 @@ class DailyDraftRunner:
 
     def publish_due_batches(self, now: datetime) -> list[Path]:
         previews: list[Path] = []
-        for date_dir in self.iter_date_dirs():
+        date_dir = self.today_dir(now)
+        pending = list_pending_articles(date_dir)
+        while len(pending) >= MAX_WECHAT_ARTICLES:
+            previews.append(self.publish_batch(date_dir, pending[:MAX_WECHAT_ARTICLES]))
             pending = list_pending_articles(date_dir)
-            while len(pending) >= MAX_WECHAT_ARTICLES:
-                previews.append(self.publish_batch(date_dir, pending[:MAX_WECHAT_ARTICLES]))
-                pending = list_pending_articles(date_dir)
-            if pending and self.should_daily_flush(date_dir, now):
-                for batch in chunk_articles(pending, MAX_WECHAT_ARTICLES):
-                    previews.append(self.publish_batch(date_dir, batch))
+        if pending and self.should_daily_flush(now):
+            for batch in chunk_articles(pending, MAX_WECHAT_ARTICLES):
+                previews.append(self.publish_batch(date_dir, batch))
         return previews
 
-    def should_daily_flush(self, date_dir: Path, now: datetime) -> bool:
-        date_key = date_dir.name
-        today_key = now.strftime("%Y%m%d")
-        if date_key < today_key:
-            return True
-        if date_key > today_key:
-            return False
+    def should_daily_flush(self, now: datetime) -> bool:
         return now.time() >= dt_time(hour=self.options.daily_flush_hour)
 
     def publish_batch(self, article_dir: Path, articles: list[Path]) -> Path:
@@ -133,14 +129,8 @@ class DailyDraftRunner:
         print(f"WeChat preview: {preview}", flush=True)
         return preview
 
-    def iter_date_dirs(self) -> list[Path]:
-        if not self.output_base_dir.exists():
-            return []
-        return sorted(
-            path
-            for path in self.output_base_dir.iterdir()
-            if path.is_dir() and path.name.isdigit() and len(path.name) == 8
-        )
+    def today_dir(self, now: datetime) -> Path:
+        return self.output_base_dir / now.strftime("%Y%m%d")
 
 
 def list_pending_articles(article_dir: Path) -> list[Path]:

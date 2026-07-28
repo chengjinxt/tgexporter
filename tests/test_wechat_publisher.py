@@ -396,3 +396,24 @@ def test_daily_draft_runner_flushes_pending_articles_at_23(tmp_path):
         "002-article.md",
     ]
     assert list(date_dir.glob("*.md")) == []
+
+
+def test_daily_draft_runner_ignores_previous_date_directories(tmp_path):
+    old_dir = tmp_path / "发布内容" / "20260725"
+    today_dir = tmp_path / "发布内容" / "20260728"
+    old_dir.mkdir(parents=True)
+    today_dir.mkdir(parents=True)
+    for index in range(8):
+        write_article(old_dir / f"{index + 1:03d}-old.md")
+    publisher = FakeDraftPublisher()
+    runner = DailyDraftRunner(
+        collector=object(),
+        publisher=publisher,
+        output_base_dir=tmp_path / "发布内容",
+        options=DraftRunOptions(poll_timeout_seconds=1),
+    )
+
+    runner.publish_due_batches(datetime(2026, 7, 28, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert publisher.batches == []
+    assert sorted(path.name for path in old_dir.glob("*.md")) == [f"{index + 1:03d}-old.md" for index in range(8)]
