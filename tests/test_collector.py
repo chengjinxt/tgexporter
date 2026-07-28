@@ -23,6 +23,7 @@ from tgexporter.collector import (
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.link_enricher import PageMetadata
 from tgexporter.models import ArticleDraft, LinkRef
+from tgexporter.software_share import GitHubRepoInfo, build_software_share, find_software_intro_title
 from tgexporter.state import StateStore
 from tgexporter.telegram_bot import TelegramBotError
 
@@ -248,6 +249,87 @@ BleepingComputer
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
+
+
+def test_software_share_uses_product_title_and_filters_promo(monkeypatch):
+    text = """#在线工具 #前端
+
+🏷 Sticker Forge - 把文字和图片变成可撕开的 3D 贴纸
+
+🌐 在线体验
+
+Sticker Forge 可以把文字或上传的图片转换成带有真实撕裂效果的 3D 贴纸。
+
+📮投稿    📢频道    💬吹水    🌐网站
+
+Sticker Forge - 把文字和图片变成可撕开的 3D 贴纸
+
+https://github.com/CatsJuice/sticker-forge
+
+在线体验
+
+https://sticker.oooo.so/
+
+网站
+
+https://geekshare.org/
+"""
+
+    def fake_fetch(url, proxy_url=None):
+        return GitHubRepoInfo(
+            owner="CatsJuice",
+            repo="sticker-forge",
+            full_name="CatsJuice/sticker-forge",
+            html_url="https://github.com/CatsJuice/sticker-forge",
+            description="A tactile WebGL sticker maker.",
+            homepage="https://sticker.oooo.so/",
+            language="JavaScript",
+            stars=123,
+            readme="- Rich text sticker editor\n- Image uploads\n- Interactive peel physics",
+        )
+
+    monkeypatch.setattr(collector_module, "build_software_share", build_software_share)
+    monkeypatch.setattr("tgexporter.software_share.fetch_github_repo_info", fake_fetch)
+
+    share = build_software_share(text, [], proxy_url=None)
+
+    assert share is not None
+    assert share.title == "Sticker Forge - 把文字和图片变成可撕开的 3D 贴纸"
+    assert "README 重点" in share.text
+    assert "投稿" not in share.text
+    assert all("geekshare.org" not in link.url for link in share.links)
+    assert share.demo_urls == ["https://sticker.oooo.so/"]
+
+
+def test_software_share_intro_title_skips_hash_tags():
+    assert find_software_intro_title("#运维 #建站 #SSH\n\n🖥 Navop - 数据库和 SSH 一体化桌面工作台") == (
+        "Navop - 数据库和 SSH 一体化桌面工作台"
+    )
+
+
+def test_software_share_builds_title_from_repo_when_intro_has_only_function(monkeypatch):
+    text = """#运维 #建站 #SSH
+
+🖥 数据库、SSH、SFTP、端口转发、终端、远程桌面、监控与 AI 一体化的原生桌面工作台
+
+https://github.com/feigeCode/navop
+"""
+
+    def fake_fetch(url, proxy_url=None):
+        return GitHubRepoInfo(
+            owner="feigeCode",
+            repo="navop",
+            full_name="feigeCode/navop",
+            html_url="https://github.com/feigeCode/navop",
+            description="Unified workspace for databases and servers.",
+        )
+
+    monkeypatch.setattr("tgexporter.software_share.fetch_github_repo_info", fake_fetch)
+
+    share = build_software_share(text, [], proxy_url=None)
+
+    assert share is not None
+    assert share.title == "Navop - 数据库、SSH、SFTP、端口转发、终端、远程桌面、监控与 AI 一体化的原生桌面工作台"
 
 
 def test_download_link_images_uses_first_picture_index(tmp_path: Path, monkeypatch):

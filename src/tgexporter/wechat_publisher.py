@@ -581,31 +581,49 @@ def add_wechat_article_slot(page, index: int) -> None:
             human_pause(page, 1800, 3200)
         else:
             print("WeChat new article menu option not found; checking whether editor switched directly.", flush=True)
-        wait_for_sidebar_article_card_count(page, before_count + 1)
-        click_blank_sidebar_article_card(page) or click_latest_sidebar_article_card(page)
-        wait_for_editor_ready(page)
-        wait_for_blank_title(page, index)
+        activate_new_article_editor(page, index, before_count)
         return
     if click_new_article_button_by_text(page):
         human_pause(page, 1000, 2000)
         if click_write_new_article_option(page):
             human_pause(page, 1800, 3200)
-        wait_for_sidebar_article_card_count(page, before_count + 1)
-        click_blank_sidebar_article_card(page) or click_latest_sidebar_article_card(page)
-        wait_for_editor_ready(page)
-        wait_for_blank_title(page, index)
+        activate_new_article_editor(page, index, before_count)
         return
     raise RuntimeError(f"Could not add WeChat sub-article slot {index}.")
+
+
+def activate_new_article_editor(page, index: int, before_count: int) -> None:
+    wait_for_sidebar_article_card_count(page, before_count + 1)
+    for attempt in range(4):
+        if title_is_blank_or_placeholder(page):
+            wait_for_editor_ready(page)
+            return
+        if click_blank_sidebar_article_card(page):
+            human_pause(page, 900, 1700)
+        elif click_latest_sidebar_article_card(page):
+            human_pause(page, 900, 1700)
+        wait_for_editor_ready(page)
+        if title_is_blank_or_placeholder(page):
+            return
+        page.wait_for_timeout(700)
+    raise RuntimeError(f"WeChat sub-article slot {index} did not become active before filling.")
 
 
 def wait_for_blank_title(page, index: int, timeout_seconds: int = 10) -> None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        title = read_current_title(page)
-        if not title or "请在这里输入标题" in title:
+        if title_is_blank_or_placeholder(page):
             return
         page.wait_for_timeout(500)
     raise RuntimeError(f"WeChat sub-article slot {index} did not become active before filling.")
+
+
+def title_is_blank_or_placeholder(page) -> bool:
+    title = read_current_title(page)
+    if not title:
+        return True
+    normalized = re.sub(r"\s+", "", title)
+    return "请在这里输入标题" in normalized or normalized in {"标题", "请输入标题"}
 
 
 def read_current_title(page) -> str:

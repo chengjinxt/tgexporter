@@ -25,6 +25,7 @@ from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_met
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, LinkRef, MediaAsset
 from .placeholder_image import write_placeholder_png
+from .software_share import SoftwareShare, build_software_share
 from .source_sites import SourceSiteRule, source_rule_for_url
 from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
@@ -163,17 +164,6 @@ class TelegramCollector:
         published_at = datetime.fromtimestamp(int(first["date"]), UTC).astimezone(self.timezone)
         date_key = published_at.strftime("%Y%m%d")
         raw_text = apply_plain_wechat_markdown_links(collect_text(messages))
-        title = derive_title(raw_text, message_ids[0])
-        existing_path = self._find_existing_article(date_key, title)
-        if existing_path is not None:
-            self.state.record_messages_processed(
-                self.channel,
-                message_ids,
-                f"duplicate:{self.channel}:{date_key}:{normalize_text(title)}",
-            )
-            print(f"Skipped duplicate article: {title} (existing: {existing_path})", file=sys.stderr)
-            return None
-        daily_index = self.state.next_daily_index(date_key)
         grouped_id = first.get("media_group_id")
         extra_links = collect_entity_links(messages)
         links = enrich_links(
@@ -184,7 +174,24 @@ class TelegramCollector:
             proxy_url=self.proxy_url,
         )
         links.extend(unique_links(enrich_wechat_article_links(raw_text, proxy_url=self.proxy_url), links))
-        text = clean_article_text(raw_text, title, [link.name for link in links])
+        software_share = build_software_share(raw_text, links, extra_links, proxy_url=self.proxy_url)
+        if software_share:
+            title = software_share.title
+            links = software_share.links
+            text = software_share.text
+        else:
+            title = derive_title(raw_text, message_ids[0])
+            text = clean_article_text(raw_text, title, [link.name for link in links])
+        existing_path = self._find_existing_article(date_key, title)
+        if existing_path is not None:
+            self.state.record_messages_processed(
+                self.channel,
+                message_ids,
+                f"duplicate:{self.channel}:{date_key}:{normalize_text(title)}",
+            )
+            print(f"Skipped duplicate article: {title} (existing: {existing_path})", file=sys.stderr)
+            return None
+        daily_index = self.state.next_daily_index(date_key)
         article = ArticleDraft(
             source="telegram",
             channel=self.channel,
@@ -201,6 +208,9 @@ class TelegramCollector:
         date_dir = self.renderer.base_dir / date_key
         date_dir.mkdir(parents=True, exist_ok=True)
         article.media.extend(self._download_message_media(messages, article, date_dir))
+        if software_share:
+            article.media.extend(self._capture_software_demo_images(article, software_share, date_dir))
+            article.media.extend(self._download_software_videos(article, software_share, date_dir))
         if not any(media.kind == "image" for media in article.media):
             article.media.extend(self._create_video_cover(article, date_dir))
         if not any(media.kind == "image" for media in article.media):
@@ -419,6 +429,62 @@ class TelegramCollector:
                 )
             ]
         return []
+
+    def _capture_software_demo_images(
+        self,
+        article: ArticleDraft,
+        software_share: SoftwareShare,
+        date_dir: Path,
+    ) -> list[MediaAsset]:
+        assets: list[MediaAsset] = []
+        for url in software_share.demo_urls[:1]:
+            filename = media_filename(article.date_key, article.daily_index, "PIC", len(assets) + 2, article.title, ".png")
+            destination = date_dir / filename
+            if not capture_source_image(url, destination, profile_dir=self.source_profile_dir):
+                continue
+            if not is_suitable_article_image(destination):
+                destination.unlink(missing_ok=True)
+                continue
+            assets.append(
+                MediaAsset(
+                    kind="image",
+                    filename=filename,
+                    path=destination,
+                    source="software_demo_capture",
+                    title=f"演示截图：{article.title}",
+                )
+            )
+        return assets
+
+    def _download_software_videos(
+        self,
+        article: ArticleDraft,
+        software_share: SoftwareShare,
+        date_dir: Path,
+    ) -> list[MediaAsset]:
+        assets: list[MediaAsset] = []
+        for url in software_share.video_urls[:2]:
+            filename = media_filename(
+                article.date_key,
+                article.daily_index,
+                "VID",
+                len(assets) + 1,
+                article.title,
+                extension_from_url(url, ".mp4"),
+            )
+            destination = date_dir / filename
+            if not download_web_file(url, destination, proxy_url=self.proxy_url, referer=software_share.links[0].url if software_share.links else None):
+                continue
+            assets.append(
+                MediaAsset(
+                    kind="video",
+                    filename=filename,
+                    path=destination,
+                    source="software_readme_video",
+                    title=f"演示视频：{article.title}",
+                )
+            )
+        return assets
 
     def _create_placeholder_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
         filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".png")

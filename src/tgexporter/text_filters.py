@@ -16,8 +16,6 @@ def is_channel_promo_line(line: str) -> bool:
         return True
     if len(line) > 80:
         return False
-    promo_terms = ("频道", "群组", "群", "投稿")
+    promo_terms = ("频道", "群组", "群", "投稿", "网站", "吹水")
     matched_terms = {term for term in promo_terms if term in line}
-    return "频道" in matched_terms and "投稿" in matched_terms and (
-        "群组" in matched_terms or "群" in matched_terms
-    )
+    return "频道" in matched_terms and "投稿" in matched_terms and len(matched_terms) >= 3
