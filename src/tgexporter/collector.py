@@ -81,6 +81,25 @@ class TelegramCollector:
             self.state.set_last_update_id(max(int(item["update_id"]) for item in updates))
         return paths
 
+    def poll_once_for_date(self, date_key: str, timeout: int = 30, latest_only: bool = False) -> list[Path]:
+        last_update_id = self.state.get_last_update_id()
+        offset = last_update_id + 1 if last_update_id is not None else None
+        updates = self.client.get_updates(
+            offset=offset,
+            timeout=timeout,
+            allowed_updates=["channel_post", "edited_channel_post"],
+        )
+        if latest_only:
+            updates = select_latest_updates(updates)
+        current_updates = [update for update in updates if self._update_matches_date(update, date_key)]
+        paths = self.process_updates(current_updates)
+        if updates:
+            self.state.set_last_update_id(max(int(item["update_id"]) for item in updates))
+        skipped = len(updates) - len(current_updates)
+        if skipped:
+            print(f"Skipped {skipped} Telegram update(s) outside draft date {date_key}.", file=sys.stderr)
+        return paths
+
     def drop_pending(self, timeout: int = 1) -> int:
         updates = self.client.get_updates(
             timeout=timeout,
@@ -143,6 +162,16 @@ class TelegramCollector:
                 rendered.append(path)
 
         return rendered
+
+    def _update_matches_date(self, update: dict[str, Any], date_key: str) -> bool:
+        message = update.get("channel_post") or update.get("edited_channel_post")
+        if not message or not self._is_target_channel(message.get("chat", {})):
+            return False
+        try:
+            message_date = datetime.fromtimestamp(int(message["date"]), UTC).astimezone(self.timezone)
+        except (KeyError, TypeError, ValueError, OSError):
+            return False
+        return message_date.strftime("%Y%m%d") == date_key
 
     def _process_group_safely(self, messages: list[dict[str, Any]]) -> Path | None:
         try:
@@ -209,6 +238,7 @@ class TelegramCollector:
         date_dir.mkdir(parents=True, exist_ok=True)
         article.media.extend(self._download_message_media(messages, article, date_dir))
         if software_share:
+            article.media.extend(self._download_software_readme_images(article, software_share, date_dir))
             article.media.extend(self._capture_software_demo_images(article, software_share, date_dir))
             article.media.extend(self._download_software_videos(article, software_share, date_dir))
         if not any(media.kind == "image" for media in article.media):
@@ -438,7 +468,14 @@ class TelegramCollector:
     ) -> list[MediaAsset]:
         assets: list[MediaAsset] = []
         for url in software_share.demo_urls[:1]:
-            filename = media_filename(article.date_key, article.daily_index, "PIC", len(assets) + 2, article.title, ".png")
+            filename = media_filename(
+                article.date_key,
+                article.daily_index,
+                "PIC",
+                next_media_index(article, "image") + len(assets),
+                article.title,
+                ".png",
+            )
             destination = date_dir / filename
             if not capture_source_image(url, destination, profile_dir=self.source_profile_dir):
                 continue
@@ -456,6 +493,41 @@ class TelegramCollector:
             )
         return assets
 
+    def _download_software_readme_images(
+        self,
+        article: ArticleDraft,
+        software_share: SoftwareShare,
+        date_dir: Path,
+    ) -> list[MediaAsset]:
+        assets: list[MediaAsset] = []
+        for image_url in software_share.image_urls[:2]:
+            extension = extension_from_url(image_url, ".jpg")
+            filename = media_filename(
+                article.date_key,
+                article.daily_index,
+                "PIC",
+                next_media_index(article, "image") + len(assets),
+                article.title,
+                extension,
+            )
+            destination = date_dir / filename
+            referer = software_share.links[0].url if software_share.links else None
+            if not download_web_file(image_url, destination, proxy_url=self.proxy_url, referer=referer):
+                continue
+            if not is_suitable_article_image(destination):
+                destination.unlink(missing_ok=True)
+                continue
+            assets.append(
+                MediaAsset(
+                    kind="image",
+                    filename=filename,
+                    path=destination,
+                    source="software_readme_image",
+                    title=f"项目截图：{article.title}",
+                )
+            )
+        return assets
+
     def _download_software_videos(
         self,
         article: ArticleDraft,
@@ -468,7 +540,7 @@ class TelegramCollector:
                 article.date_key,
                 article.daily_index,
                 "VID",
-                len(assets) + 1,
+                next_media_index(article, "video") + len(assets),
                 article.title,
                 extension_from_url(url, ".mp4"),
             )
@@ -879,6 +951,10 @@ def link_image_candidates(link: LinkRef) -> list[str]:
         if image_url not in candidates:
             candidates.append(image_url)
     return candidates
+
+
+def next_media_index(article: ArticleDraft, kind: str) -> int:
+    return sum(1 for media in article.media if media.kind == kind) + 1
 
 
 def extension_from_url(url: str, fallback: str) -> str:

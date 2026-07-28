@@ -285,7 +285,14 @@ https://geekshare.org/
             homepage="https://sticker.oooo.so/",
             language="JavaScript",
             stars=123,
-            readme="- Rich text sticker editor\n- Image uploads\n- Interactive peel physics",
+            readme=(
+                "![Demo](docs/demo.png)\n"
+                "- Rich text sticker editor\n"
+                "- Image uploads\n"
+                "- Interactive peel physics\n"
+                "sticker-forge.es.js"
+            ),
+            default_branch="dev",
         )
 
     monkeypatch.setattr(collector_module, "build_software_share", build_software_share)
@@ -295,10 +302,57 @@ https://geekshare.org/
 
     assert share is not None
     assert share.title == "Sticker Forge - 把文字和图片变成可撕开的 3D 贴纸"
-    assert "README 重点" in share.text
+    assert "README 中文总结" in share.text
+    assert "富文本" in share.text
+    assert "sticker-forge.es.js" not in share.text
     assert "投稿" not in share.text
     assert all("geekshare.org" not in link.url for link in share.links)
+    assert share.image_urls == ["https://raw.githubusercontent.com/CatsJuice/sticker-forge/dev/docs/demo.png"]
     assert share.demo_urls == ["https://sticker.oooo.so/"]
+
+
+def test_collector_poll_once_for_date_skips_old_updates(tmp_path: Path):
+    old_ts = int(datetime(2026, 7, 28, 1, 0, tzinfo=UTC).timestamp())
+    today_ts = int(datetime(2026, 7, 29, 1, 0, tzinfo=UTC).timestamp())
+
+    class DatedBotClient(FakeBotClient):
+        def get_updates(self, offset=None, timeout=30, allowed_updates=None):
+            return [
+                {
+                    "update_id": 201,
+                    "channel_post": {
+                        "message_id": 21,
+                        "date": old_ts,
+                        "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                        "text": "旧消息不应生成",
+                    },
+                },
+                {
+                    "update_id": 202,
+                    "channel_post": {
+                        "message_id": 22,
+                        "date": today_ts,
+                        "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                        "text": "当天消息应该生成",
+                    },
+                },
+            ]
+
+    state = StateStore(tmp_path / "state.sqlite")
+    renderer = MarkdownRenderer(tmp_path / "发布内容")
+    collector = TelegramCollector(
+        client=DatedBotClient(),
+        state=state,
+        renderer=renderer,
+        channel="TechnologyNewsSyncAssistant",
+    )
+
+    paths = collector.poll_once_for_date("20260729", timeout=1)
+
+    assert len(paths) == 1
+    assert paths[0].parent.name == "20260729"
+    assert not (tmp_path / "发布内容" / "20260728").exists()
+    assert state.get_last_update_id() == 202
 
 
 def test_software_share_intro_title_skips_hash_tags():

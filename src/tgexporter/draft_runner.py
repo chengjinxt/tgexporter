@@ -65,8 +65,10 @@ class DailyDraftRunner:
             flush=True,
         )
         while True:
+            now = datetime.now(self.timezone)
             try:
-                paths = self.collector.poll_once(
+                paths = self.collector.poll_once_for_date(
+                    now.strftime("%Y%m%d"),
                     timeout=poll_timeout_after_transient_error(
                         self.options.poll_timeout_seconds,
                         consecutive_errors,
@@ -94,7 +96,7 @@ class DailyDraftRunner:
 
             for path in paths:
                 print(f"Rendered: {path}", flush=True)
-            self.publish_due_batches(now=datetime.now(self.timezone))
+            self.publish_due_batches(now=now)
             time.sleep(self.options.check_interval_seconds)
 
     def publish_due_batches(self, now: datetime) -> list[Path]:
