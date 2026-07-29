@@ -594,11 +594,13 @@ def add_wechat_article_slot(page, index: int) -> None:
 
 def activate_new_article_editor(page, index: int, before_count: int) -> None:
     wait_for_sidebar_article_card_count(page, before_count + 1)
-    for attempt in range(4):
+    for attempt in range(6):
         if title_is_blank_or_placeholder(page):
             wait_for_editor_ready(page)
             return
         if click_blank_sidebar_article_card(page):
+            human_pause(page, 900, 1700)
+        elif click_newest_unselected_sidebar_article_card(page):
             human_pause(page, 900, 1700)
         elif click_latest_sidebar_article_card(page):
             human_pause(page, 900, 1700)
@@ -1485,6 +1487,70 @@ def click_latest_sidebar_article_card(page) -> bool:
         return False
 
 
+def click_newest_unselected_sidebar_article_card(page) -> bool:
+    try:
+        point = page.evaluate(
+            """() => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 60 &&
+                            rect.height > 40 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const textOf = (node) => (node.innerText || node.textContent || '').replace(/\\s+/g, '');
+                    const selected = (node) => {
+                        for (let current = node; current; current = current.parentElement) {
+                            const cls = String(current.className || '');
+                            const aria = current.getAttribute('aria-selected') || '';
+                            if (/selected|active|current|checked|appmsg_item_v2_selected/i.test(cls) || aria === 'true') return true;
+                            const rect = current.getBoundingClientRect();
+                            if (rect.left >= 0 && rect.left < 430 && rect.right <= 470 && /border|outline/.test(String(current.getAttribute('style') || ''))) return true;
+                        }
+                        return false;
+                    };
+                    const candidates = [...document.querySelectorAll('li, div, a')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const text = textOf(el);
+                            const style = window.getComputedStyle(el);
+                            const hasMedia = Boolean(el.querySelector('img')) || style.backgroundImage !== 'none';
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            return {el, rect, text, hasMedia, inDialog, selected: selected(el)};
+                        })
+                        .filter(({rect, text, hasMedia, inDialog, selected}) =>
+                            !selected &&
+                            !inDialog &&
+                            rect.left >= 0 &&
+                            rect.left < 430 &&
+                            rect.right <= 470 &&
+                            rect.top > 60 &&
+                            text &&
+                            !/新建内容|添加|历史版本|操作时间|操作人|来源|操作/.test(text) &&
+                            (hasMedia || text.length > 2 || text === '标题')
+                        )
+                        .sort((a, b) => b.rect.top - a.rect.top);
+                    if (!candidates.length) return null;
+                    const rect = candidates[0].rect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + Math.min(rect.height / 2, 60)};
+                }"""
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        human_pause(page, 800, 1500)
+        return True
+    except Exception:
+        return False
+
+
 def close_wechat_search_component_dialog(page) -> bool:
     try:
         point = page.evaluate(
@@ -1567,8 +1633,13 @@ def click_new_article_button_in_sidebar(page) -> bool:
                         .map((el) => {
                             const rect = el.getBoundingClientRect();
                             const text = textOf(el);
+                            const rawText = (el.innerText || el.textContent || '').trim();
+                            const cls = String(el.className || '');
+                            const aria = el.getAttribute('aria-label') || '';
+                            const title = el.getAttribute('title') || '';
                             const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
                             const inToolbar = Boolean(el.closest('[role="toolbar"], .toolbar, [class*="toolbar"], [class*="tool_bar"], [class*="edui-toolbar"]'));
+                            const hasMedia = Boolean(el.querySelector('img')) || window.getComputedStyle(el).backgroundImage !== 'none';
                             let clickable = el;
                             for (let i = 0; i < 5 && clickable.parentElement; i += 1) {
                                 const parent = clickable.parentElement;
@@ -1585,24 +1656,35 @@ def click_new_article_button_in_sidebar(page) -> bool:
                                 }
                             }
                             const clickRect = clickable.getBoundingClientRect();
-                            return {el, rect, clickRect, text, inDialog, inToolbar};
+                            const clickableText = textOf(clickable);
+                            const marker = `${rawText} ${cls} ${aria} ${title} ${clickableText}`;
+                            const looksAdd = /\\+|add|create|new|append|新建|新增|添加/i.test(marker);
+                            return {el, rect, clickRect, text, clickableText, inDialog, inToolbar, hasMedia, looksAdd};
                         })
-                        .filter(({rect, text, inDialog, inToolbar}) =>
-                            normalizedLabels.some((label) => text === label || text === `+${label}`) &&
+                        .filter(({rect, clickRect, text, clickableText, inDialog, inToolbar, hasMedia, looksAdd}) =>
+                            normalizedLabels.some((label) =>
+                                text === label ||
+                                text === `+${label}` ||
+                                clickableText === label ||
+                                clickableText === `+${label}`
+                            ) &&
                             !inDialog &&
                             !inToolbar &&
+                            !hasMedia &&
+                            looksAdd &&
                             rect.left >= 0 &&
                             rect.left < 430 &&
                             rect.right <= 460 &&
                             rect.top > 120 &&
-                            rect.width > 40 &&
-                            rect.height > 16
+                            clickRect.width > 40 &&
+                            clickRect.height > 16 &&
+                            clickRect.height < 90
                         )
                         .sort((a, b) => {
                             const aExact = normalizedLabels.some((label) => a.text === label || a.text === `+${label}`) ? 0 : 1;
                             const bExact = normalizedLabels.some((label) => b.text === label || b.text === `+${label}`) ? 0 : 1;
                             if (aExact !== bExact) return aExact - bExact;
-                            return (a.clickRect.width * a.clickRect.height) - (b.clickRect.width * b.clickRect.height);
+                            return b.rect.top - a.rect.top;
                         });
                     if (!nodes.length) return null;
                     const rect = nodes[0].clickRect;
