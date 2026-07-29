@@ -504,6 +504,148 @@ def test_capture_link_image_uses_web_screenshot_when_link_images_fail(tmp_path: 
     assert assets[0].filename == "20260716_009_PIC_001_正文截图配图文章.png"
 
 
+def test_download_google_image_tries_source_enriched_queries(tmp_path: Path, monkeypatch):
+    queries: list[str] = []
+
+    def fake_find_google_image_urls(query, proxy_url=None):
+        queries.append(query)
+        if "Bloomberg" in query:
+            return ["https://images.example.com/openai-modal.jpg"]
+        return []
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"google-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "find_google_image_urls", fake_find_google_image_urls)
+    monkeypatch.setattr(collector_module, "find_google_image_urls_via_browser", lambda query, profile_dir=None: [])
+    monkeypatch.setattr(collector_module, "find_bing_image_urls", lambda query, required_terms=None: [])
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 29, tzinfo=UTC),
+        date_key="20260729",
+        daily_index=5,
+        title="OpenAI 失控 AI 代理再入侵第二家公司客户账户",
+        text="OpenAI 代理侵入 Hugging Face 后又被曝入侵 Modal 客户。",
+        links=[
+            LinkRef(
+                name="Bloomberg",
+                url="https://www.bloomberg.com/news/articles/2026-07-28/openai-rogue-agent-hacked-account-at-a-second-firm-reuters-says",
+            )
+        ],
+    )
+
+    assets = collector._download_google_image(article, tmp_path / "发布内容" / "20260729")
+
+    assert len(assets) == 1
+    assert assets[0].source == "google_image_search"
+    assert assets[0].path.read_bytes() == b"google-image"
+    assert queries[:2] == [
+        "OpenAI 失控 AI 代理再入侵第二家公司客户账户",
+        "OpenAI 失控 AI 代理再入侵第二家公司客户账户 Bloomberg",
+    ]
+
+
+def test_download_google_image_uses_browser_fallback(tmp_path: Path, monkeypatch):
+    browser_queries: list[str] = []
+
+    monkeypatch.setattr(collector_module, "find_google_image_urls", lambda query, proxy_url=None: [])
+
+    def fake_browser_search(query, profile_dir=None):
+        browser_queries.append(query)
+        return ["https://encrypted-tbn0.gstatic.com/images?q=tbn:modal-openai"]
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"browser-google-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "find_google_image_urls_via_browser", fake_browser_search)
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 29, tzinfo=UTC),
+        date_key="20260729",
+        daily_index=5,
+        title="OpenAI 失控 AI 代理再入侵第二家公司客户账户",
+        text="OpenAI 代理侵入 Hugging Face 后又被曝入侵 Modal 客户。",
+        links=[],
+    )
+
+    assets = collector._download_google_image(article, tmp_path / "发布内容" / "20260729")
+
+    assert len(assets) == 1
+    assert assets[0].path.read_bytes() == b"browser-google-image"
+    assert browser_queries == ["OpenAI 失控 AI 代理再入侵第二家公司客户账户"]
+
+
+def test_download_google_image_uses_bing_after_google_blocked(tmp_path: Path, monkeypatch):
+    bing_calls: list[tuple[str, list[str] | None]] = []
+
+    monkeypatch.setattr(collector_module, "find_google_image_urls", lambda query, proxy_url=None: [])
+    monkeypatch.setattr(collector_module, "find_google_image_urls_via_browser", lambda query, profile_dir=None: [])
+
+    def fake_bing(query, required_terms=None):
+        bing_calls.append((query, required_terms))
+        return ["https://news.example.com/openai-modal.jpg"]
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"bing-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "find_bing_image_urls", fake_bing)
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 29, tzinfo=UTC),
+        date_key="20260729",
+        daily_index=5,
+        title="OpenAI 失控 AI 代理再入侵第二家公司客户账户",
+        text="OpenAI 代理侵入 Hugging Face 后又被曝入侵 Modal 客户。",
+        links=[LinkRef(name="Bloomberg", url="https://www.bloomberg.com/news/articles/openai-rogue-agent-hacked-account")],
+    )
+
+    assets = collector._download_google_image(article, tmp_path / "发布内容" / "20260729")
+
+    assert len(assets) == 1
+    assert assets[0].path.read_bytes() == b"bing-image"
+    assert bing_calls[0][0] == "OpenAI 失控 AI 代理再入侵第二家公司客户账户"
+    assert {"openai", "hugging", "modal", "bloomberg"} & set(bing_calls[0][1] or [])
+
+
 def test_download_browser_link_images_uses_dynamic_source_image(tmp_path: Path, monkeypatch):
     captured: list[tuple[str, str | None]] = []
 

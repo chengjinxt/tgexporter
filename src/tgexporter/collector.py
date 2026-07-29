@@ -10,7 +10,7 @@ import urllib.request
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
 from .filename import (
@@ -19,7 +19,7 @@ from .filename import (
     media_filename,
     sanitize_title,
 )
-from .image_search import find_google_image_urls
+from .image_search import find_bing_image_urls, find_google_image_urls, find_google_image_urls_via_browser
 from .image_filter import is_suitable_article_image
 from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_metadata, is_wechat_article_url
 from .markdown_renderer import MarkdownRenderer
@@ -434,7 +434,7 @@ class TelegramCollector:
         )
 
     def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
-        for image_url in find_google_image_urls(article.title, proxy_url=self.proxy_url):
+        for image_url in google_image_candidates(article, self.proxy_url, self.source_profile_dir):
             filename = media_filename(
                 article.date_key,
                 article.daily_index,
@@ -951,6 +951,120 @@ def link_image_candidates(link: LinkRef) -> list[str]:
         if image_url not in candidates:
             candidates.append(image_url)
     return candidates
+
+
+def google_image_candidates(
+    article: ArticleDraft,
+    proxy_url: str | None = None,
+    profile_dir: Path | None = None,
+) -> Iterator[str]:
+    seen_urls: set[str] = set()
+    for query in google_image_search_queries(article):
+        query_urls = find_google_image_urls(query, proxy_url=proxy_url)
+        if not query_urls:
+            query_urls = find_google_image_urls_via_browser(query, profile_dir=profile_dir)
+        if not query_urls:
+            query_urls = find_bing_image_urls(query, required_terms=image_search_required_terms(article))
+        for image_url in query_urls:
+            if image_url not in seen_urls:
+                seen_urls.add(image_url)
+                yield image_url
+
+
+def google_image_search_queries(article: ArticleDraft) -> list[str]:
+    queries: list[str] = []
+    append_query(queries, article.title)
+    for link in article.links:
+        source_name = clean_query_part(link.name)
+        if source_name:
+            append_query(queries, f"{article.title} {source_name}")
+        domain = source_domain_name(link.url)
+        if domain:
+            append_query(queries, f"{article.title} {domain}")
+        slug = search_keywords_from_url(link.url)
+        if slug:
+            if source_name:
+                append_query(queries, f"{source_name} {slug}")
+            append_query(queries, slug)
+    text_keywords = extract_search_keywords(article.text)
+    if text_keywords:
+        append_query(queries, f"{article.title} {text_keywords}")
+    return queries[:6]
+
+
+def append_query(queries: list[str], query: str) -> None:
+    query = re.sub(r"\s+", " ", clean_wechat_query_text(query)).strip()
+    if query and query not in queries:
+        queries.append(query)
+
+
+def clean_wechat_query_text(value: str) -> str:
+    return re.sub(r"[\U00010000-\U0010ffff]", " ", value or "")
+
+
+def clean_query_part(value: str) -> str:
+    value = clean_wechat_query_text(value)
+    value = re.sub(r"https?://\S+", " ", value)
+    value = re.sub(r"[()（）\[\]【】]", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def source_domain_name(url: str) -> str:
+    host = (urllib.parse.urlparse(url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    if len(parts) >= 2:
+        return parts[-2]
+    return host
+
+
+def extract_search_keywords(text: str, max_words: int = 8) -> str:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9._-]{1,}|[\u4e00-\u9fff]{2,}", text or "")
+    skipped = {"https", "http", "com", "www"}
+    picked: list[str] = []
+    for word in words:
+        if word.lower() in skipped or word in picked:
+            continue
+        picked.append(word)
+        if len(picked) >= max_words:
+            break
+    return " ".join(picked)
+
+
+def search_keywords_from_url(url: str, max_words: int = 10) -> str:
+    path = urllib.parse.urlparse(url).path
+    words = re.findall(r"[A-Za-z][A-Za-z0-9]+", path.replace("-", " ").replace("_", " "))
+    skipped = {"news", "articles", "article", "detail", "html", "index", "2026", "2025", "2024"}
+    picked: list[str] = []
+    for word in words:
+        normalized = word.lower()
+        if normalized in skipped or normalized in picked:
+            continue
+        picked.append(normalized)
+        if len(picked) >= max_words:
+            break
+    return " ".join(picked)
+
+
+def image_search_required_terms(article: ArticleDraft) -> list[str]:
+    text = " ".join(
+        [article.title, article.text]
+        + [link.name for link in article.links]
+        + [urllib.parse.urlparse(link.url).netloc for link in article.links]
+        + [search_keywords_from_url(link.url, max_words=12) for link in article.links]
+    )
+    candidates = re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", text)
+    skipped = {"www", "com", "news", "article", "articles", "html", "says", "firm", "account", "second"}
+    terms: list[str] = []
+    for item in candidates:
+        term = item.lower()
+        if term in skipped or term in terms:
+            continue
+        terms.append(term)
+        if len(terms) >= 8:
+            break
+    return terms
 
 
 def next_media_index(article: ArticleDraft, kind: str) -> int:
