@@ -15,7 +15,7 @@ from .state import StateStore
 from .telegram_bot import TelegramBotClient, TelegramBotError
 from .web_capture import open_source_login_browser
 from .web_sources import WebSourceCollector, load_web_source_group, run_web_source_loop
-from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
+from .wechat_publisher import ARTICLE_SUFFIXES, MAX_WECHAT_ARTICLES, WechatPublisher
 
 MARKDOWN_ASSET_RE = re.compile(r"!?\[[^\]]*]\((?P<target>[^)]+)\)")
 BATCH_DIR_RE = re.compile(r"^第(?P<index>\d+)批$")
@@ -351,9 +351,11 @@ def resolve_publish_articles(article_paths: list[Path] | None, article_dir: Path
             raise RuntimeError(f"Article directory does not exist: {directory}")
         if not directory.is_dir():
             raise RuntimeError(f"Article directory is not a directory: {directory}")
-        articles = sorted(path.resolve() for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".md")
+        articles = sorted(
+            path.resolve() for path in directory.iterdir() if path.is_file() and path.suffix.lower() in ARTICLE_SUFFIXES
+        )
         if not articles:
-            raise RuntimeError(f"No Markdown articles found in directory: {directory}")
+            raise RuntimeError(f"No Markdown/MK articles found in directory: {directory}")
         return articles
     return [article.resolve() for article in article_paths or []]
 

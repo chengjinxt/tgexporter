@@ -64,6 +64,35 @@ def find_google_image_urls_via_browser(
     except ImportError:
         return []
 
+    search_url = "https://www.google.com/search?" + urllib.parse.urlencode(
+        {"tbm": "isch", "q": query, "hl": "zh-CN", "safe": "off"}
+    )
+    try:
+        with sync_playwright() as playwright:
+            context, close_context = create_browser_context(playwright, headless=True, profile_dir=profile_dir)
+            page = context.new_page()
+            page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
+            page.set_default_timeout(timeout_ms)
+            try:
+                page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                page.wait_for_timeout(2500)
+                dismiss_common_overlays(page)
+                page.evaluate("window.scrollTo(0, 350)")
+                page.wait_for_timeout(1000)
+                visible_urls = page.evaluate(GOOGLE_VISIBLE_IMAGE_SCRIPT, limit * 2)
+                urls = extract_google_image_urls(page.content())
+                for raw_url in visible_urls:
+                    url = clean_google_image_url(str(raw_url))
+                    if url and not should_skip_google_image_url(url) and url not in urls:
+                        urls.append(url)
+                    if len(urls) >= limit:
+                        break
+                return urls[:limit]
+            finally:
+                close_context()
+    except Exception:
+        return []
+
 
 def find_bing_image_urls(
     query: str,
@@ -97,9 +126,9 @@ def find_bing_image_urls(
         except (TypeError, json.JSONDecodeError):
             continue
         image_url = clean_google_image_url(str(data.get("murl") or data.get("turl") or ""))
-        if not image_url or should_skip_google_image_url(image_url):
-            continue
         candidate_text = " ".join(str(data.get(key) or "") for key in ("t", "purl", "murl")).lower()
+        if not image_url or should_skip_google_image_url(image_url, candidate_text):
+            continue
         if required and not any(term in candidate_text for term in required):
             continue
         if image_url not in urls:
@@ -107,35 +136,6 @@ def find_bing_image_urls(
         if len(urls) >= limit:
             break
     return urls
-
-    search_url = "https://www.google.com/search?" + urllib.parse.urlencode(
-        {"tbm": "isch", "q": query, "hl": "zh-CN", "safe": "off"}
-    )
-    try:
-        with sync_playwright() as playwright:
-            context, close_context = create_browser_context(playwright, headless=True, profile_dir=profile_dir)
-            page = context.new_page()
-            page.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined })")
-            page.set_default_timeout(timeout_ms)
-            try:
-                page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
-                page.wait_for_timeout(2500)
-                dismiss_common_overlays(page)
-                page.evaluate("window.scrollTo(0, 350)")
-                page.wait_for_timeout(1000)
-                visible_urls = page.evaluate(GOOGLE_VISIBLE_IMAGE_SCRIPT, limit * 2)
-                urls = extract_google_image_urls(page.content())
-                for raw_url in visible_urls:
-                    url = clean_google_image_url(str(raw_url))
-                    if url and not should_skip_google_image_url(url) and url not in urls:
-                        urls.append(url)
-                    if len(urls) >= limit:
-                        break
-                return urls[:limit]
-            finally:
-                close_context()
-    except Exception:
-        return []
 
 
 def extract_google_image_urls(text: str) -> list[str]:
@@ -170,13 +170,47 @@ def clean_google_image_url(url: str) -> str:
     return url if url.startswith(("http://", "https://")) else ""
 
 
-def should_skip_google_image_url(url: str) -> bool:
+def should_skip_google_image_url(url: str, context_text: str = "") -> bool:
     parsed = urllib.parse.urlparse(url)
     host = (parsed.hostname or "").lower()
-    path = parsed.path.lower()
+    path = urllib.parse.unquote(parsed.path.lower())
     if "google" in host and "gstatic.com" not in host:
         return True
+    combined = f"{host} {path} {context_text}".lower()
     if any(token in path for token in ("/logo", "sprite", "favicon", "icon", "avatar", "qrcode")):
+        return True
+    bad_hosts = (
+        "adobe.com",
+        "stock.adobe.com",
+        "shutterstock.com",
+        "istockphoto.com",
+        "depositphotos.com",
+        "dreamstime.com",
+        "freepik.com",
+        "pinterest.",
+        "alamy.com",
+        "123rf.com",
+    )
+    if any(token in host for token in bad_hosts):
+        return True
+    bad_context = (
+        "cat breeds",
+        "cat-breeds",
+        "cat_breeds",
+        "keepin' it cute",
+        "keeping it cute",
+        "keepin-it-cute",
+        "cute-today",
+        "lingerie",
+        "bikini",
+        "bra ",
+        "underwear",
+        "cute today",
+        "stock photo",
+        "stock-photo",
+        "adobe-stock",
+    )
+    if any(token in combined for token in bad_context):
         return True
     return False
 

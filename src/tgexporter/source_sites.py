@@ -20,7 +20,7 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "weibo.com": SourceSiteRule(
         domain="weibo.com",
         name="微博 / 新浪科技",
-        resource_method="浏览器渲染后截取微博正文中的最大图片",
+        resource_method="浏览器渲染后优先截取微博正文媒体；无媒体时截取单条微博正文区域",
         fallback_method="Google 图片搜索同标题相似配图",
         notes="匿名 HTTP 通常跳转到 Visitor System，不能只靠 urllib 抓图。",
         login_requirement="可能需要登录",
@@ -29,7 +29,7 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "m.weibo.cn": SourceSiteRule(
         domain="m.weibo.cn",
         name="微博移动页",
-        resource_method="浏览器渲染后截取微博正文中的最大图片",
+        resource_method="浏览器渲染后优先截取微博正文媒体；无媒体时截取单条微博正文区域",
         fallback_method="Google 图片搜索同标题相似配图",
         notes="移动页匿名访问也可能进入 Visitor System。",
         login_requirement="可能需要登录",
@@ -92,8 +92,9 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
         name="Axios",
         resource_method="浏览器渲染后提取正文主图 URL，再带 Referer 下载 images.axios.com 图片",
         fallback_method="浏览器截取正文主图；仍失败才进入 Google 图片搜索",
-        notes="Axios 匿名 HTTP 可能返回 403，但 Playwright 渲染页可读取正文图片。",
-        login_requirement="通常无需登录",
+        notes="Axios 匿名 HTTP 可能返回 403 或 Cloudflare 安全验证，通过 source-login 完成验证后再复用浏览器 profile 抓图。",
+        login_requirement="可能需要人机验证",
+        login_hint="如果看到 Cloudflare 验证页，先运行 source-login 打开 Axios 并完成验证。",
     ),
     "x.com": SourceSiteRule(
         domain="x.com",

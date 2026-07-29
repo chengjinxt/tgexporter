@@ -1055,11 +1055,28 @@ def image_search_required_terms(article: ArticleDraft) -> list[str]:
         + [search_keywords_from_url(link.url, max_words=12) for link in article.links]
     )
     candidates = re.findall(r"[A-Za-z][A-Za-z0-9]{2,}", text)
-    skipped = {"www", "com", "news", "article", "articles", "html", "says", "firm", "account", "second"}
+    skipped = {
+        "www",
+        "com",
+        "news",
+        "article",
+        "articles",
+        "html",
+        "says",
+        "firm",
+        "account",
+        "second",
+        "stock",
+        "photo",
+        "images",
+        "image",
+        "jpg",
+        "png",
+    }
     terms: list[str] = []
     for item in candidates:
         term = item.lower()
-        if term in skipped or term in terms:
+        if len(term) < 4 or term in skipped or term in terms:
             continue
         terms.append(term)
         if len(terms) >= 8:

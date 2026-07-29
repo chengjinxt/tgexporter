@@ -86,6 +86,8 @@ def capture_source_image(
                 load_lazy_media(page)
                 if is_blocked_page(page):
                     return False
+                if prefers_article_screenshot(url) and screenshot_article_region(page, destination):
+                    return True
                 if screenshot_largest_image(page, destination):
                     return True
                 return screenshot_article_region(page, destination)
@@ -94,6 +96,11 @@ def capture_source_image(
     except Exception:
         destination.unlink(missing_ok=True)
         return False
+
+
+def prefers_article_screenshot(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").removeprefix("www.").lower()
+    return hostname in {"x.com", "twitter.com", "weibo.com", "m.weibo.cn"}
 
 
 def extract_source_image_urls(
@@ -282,6 +289,15 @@ def screenshot_article_region(page, destination: Path) -> bool:
             const domainSelectors = {
                 'x.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
                 'twitter.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
+                'weibo.com': [
+                    '[class*="detail_wbtext"]',
+                    '[class*="Feed_detail"]',
+                    '[class*="card-wrap"]',
+                    '[class*="woo-box-flex"][class*="woo-box-alignCenter"]',
+                    'article',
+                    'main'
+                ],
+                'm.weibo.cn': ['article', '[class*="card"]', '[class*="weibo"]', 'main'],
                 'reuters.com': ['article', '[data-testid*="Article"]', 'main'],
                 'theinformation.com': ['article', 'main', '[class*="article"]'],
                 'cls.cn': ['.detail-content', '.article-content', '.article', '.detail', 'main'],

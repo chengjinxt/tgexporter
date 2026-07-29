@@ -37,3 +37,26 @@ def test_find_bing_image_urls_filters_by_required_terms(monkeypatch):
     assert image_search.find_bing_image_urls("OpenAI Modal", required_terms=["openai", "modal"]) == [
         "https://news.example/openai-modal.jpg"
     ]
+
+
+def test_find_bing_image_urls_skips_stock_and_irrelevant_terms(monkeypatch):
+    html = (
+        '<a m="{&quot;murl&quot;:&quot;https://stock.adobe.com/cat-breeds.jpg&quot;,&quot;t&quot;:&quot;Cat breeds stock photo&quot;}"></a>'
+        '<a m="{&quot;murl&quot;:&quot;https://news.example/sk-hynix-profit.jpg&quot;,&quot;t&quot;:&quot;SK Hynix Q2 profit Reuters&quot;}"></a>'
+    )
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self, limit):
+            return html.encode("utf-8")
+
+    monkeypatch.setattr(image_search.urllib.request, "urlopen", lambda request, timeout=12: FakeResponse())
+
+    assert image_search.find_bing_image_urls("SK Hynix profit", required_terms=["hynix", "reuters"]) == [
+        "https://news.example/sk-hynix-profit.jpg"
+    ]

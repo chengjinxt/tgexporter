@@ -64,7 +64,7 @@ title: "预览文章"
     html = markdown_to_wechat_html(article)
 
     assert article.title == "预览文章"
-    assert "<h1>预览文章</h1>" in html
+    assert "<h1" in html and "预览文章</h1>" in html
     assert image.resolve().as_uri() in html
 
 
@@ -145,9 +145,9 @@ https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/
     )
     items = build_wechat_body_items(article)
 
-    assert "<p>OpenAI</p>" in html
+    assert "OpenAI</p>" in html
     assert "https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/" in html
-    assert any(item[0] == "html" and item[1] == "<p>OpenAI</p>" for item in items)
+    assert any(item[0] == "html" and "OpenAI</p>" in str(item[1]) for item in items)
     assert any(
         item[0] == "html" and "https://openai.com/zh-Hans-CN/supply/co-lab/work-louder/" in str(item[1])
         for item in items
@@ -205,8 +205,10 @@ title: "公众号链接文章"
     html = markdown_to_wechat_html(article, include_title=False)
     items = build_wechat_body_items(article)
 
-    assert '<a href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw">长安街知事</a>' in html
-    assert '<a href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw">长安街知事</a>' in str(items[0][1])
+    assert 'href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw"' in html
+    assert "长安街知事</a>" in html
+    assert 'href="https://mp.weixin.qq.com/s/Wp0PdV83btg8skL6ypfXHw"' in str(items[0][1])
+    assert "长安街知事</a>" in str(items[0][1])
 
 
 def test_wechat_publish_accepts_multiple_article_paths():
@@ -219,19 +221,62 @@ def test_wechat_publish_accepts_multiple_article_paths():
 def test_wechat_publish_accepts_article_dir(tmp_path):
     second = tmp_path / "002-second.md"
     first = tmp_path / "001-first.md"
+    mk_article = tmp_path / "003-third.mk"
     ignored = tmp_path / "cover.jpg"
     nested = tmp_path / "nested"
     nested.mkdir()
     nested_article = nested / "000-nested.md"
     second.write_text("# second", encoding="utf-8")
     first.write_text("# first", encoding="utf-8")
+    mk_article.write_text("# third", encoding="utf-8")
     nested_article.write_text("# nested", encoding="utf-8")
     ignored.write_bytes(b"img")
     args = build_parser().parse_args(["publish-wechat", "--article-dir", str(tmp_path), "--auto-fill"])
 
     articles = resolve_publish_articles(args.article, args.article_dir)
 
-    assert [path.name for path in articles] == ["001-first.md", "002-second.md"]
+    assert [path.name for path in articles] == ["001-first.md", "002-second.md", "003-third.mk"]
+
+
+def test_mk_wechat_conversion_uses_wechat_styled_blocks(tmp_path):
+    image = tmp_path / "cover.jpg"
+    image.write_bytes(b"img")
+    article_path = tmp_path / "article.mk"
+    article_path.write_text(
+        """---
+title: "MK 示例"
+---
+
+# MK 示例
+
+## 亮点
+
+> 适合直接粘贴公众号。
+
+- 支持 **加粗**
+- 支持 `inline code`
+
+```bash
+tgexporter publish-wechat --article-dir ./发布内容/20260729
+```
+
+![图](cover.jpg)
+""",
+        encoding="utf-8",
+    )
+
+    article = parse_markdown_article(article_path)
+    html = markdown_to_wechat_html(article)
+    items = build_wechat_body_items(article)
+
+    assert article.title == "MK 示例"
+    assert 'style="' in html
+    assert "<h2" in html and "亮点" in html
+    assert "<blockquote" in html
+    assert "<ul" in html and "<strong>加粗</strong>" in html
+    assert "<pre" in html and "tgexporter publish-wechat" in html
+    assert [kind for kind, _ in items][-1] == "image"
+    assert items[-1][1] == image
 
 
 def test_wechat_publish_rejects_article_and_article_dir_together(tmp_path):

@@ -14,7 +14,7 @@ from .collector import (
     poll_timeout_after_transient_error,
     telegram_network_hint,
 )
-from .wechat_publisher import MAX_WECHAT_ARTICLES, WechatPublisher
+from .wechat_publisher import ARTICLE_SUFFIXES, MAX_WECHAT_ARTICLES, WechatPublisher
 
 
 class DraftPublisher(Protocol):
@@ -138,7 +138,9 @@ class DailyDraftRunner:
 def list_pending_articles(article_dir: Path) -> list[Path]:
     if not article_dir.exists():
         return []
-    return sorted(path.resolve() for path in article_dir.iterdir() if path.is_file() and path.suffix.lower() == ".md")
+    return sorted(
+        path.resolve() for path in article_dir.iterdir() if path.is_file() and path.suffix.lower() in ARTICLE_SUFFIXES
+    )
 
 
 def chunk_articles(articles: list[Path], size: int) -> list[list[Path]]:

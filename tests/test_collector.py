@@ -302,7 +302,7 @@ https://geekshare.org/
 
     assert share is not None
     assert share.title == "Sticker Forge - 把文字和图片变成可撕开的 3D 贴纸"
-    assert "README 中文总结" in share.text
+    assert "它能解决什么问题？" in share.text
     assert "富文本" in share.text
     assert "sticker-forge.es.js" not in share.text
     assert "投稿" not in share.text
@@ -384,6 +384,53 @@ https://github.com/feigeCode/navop
 
     assert share is not None
     assert share.title == "Navop - 数据库、SSH、SFTP、端口转发、终端、远程桌面、监控与 AI 一体化的原生桌面工作台"
+
+
+def test_software_share_filters_ai_meta_and_uses_chinese_readme_blob(monkeypatch):
+    text = """🧩 buildby - 检测桌面应用是用什么技术构建的
+
+为你撰写了一篇非常适合在微信公众号发布的推文。文章排版结构清晰、语言生动活泼。
+
+buildby 是一个开源的命令行工具，可以检测 macOS 和 Windows 上的桌面应用技术栈。
+
+https://github.com/wavever/buildby/blob/master/README.zh-CN.md
+"""
+
+    def fake_fetch(url, proxy_url=None):
+        return GitHubRepoInfo(
+            owner="wavever",
+            repo="buildby",
+            full_name="wavever/buildby",
+            html_url="https://github.com/wavever/buildby",
+            description="Detect what desktop apps are built with.",
+            language="TypeScript",
+            stars=88,
+            readme="English README should be replaced.",
+        )
+
+    def fake_blob(url, proxy_url=None):
+        return """# buildby
+
+- 支持检测 Electron、Tauri、Flutter、Qt、Win32 等桌面应用技术栈。
+- 单应用查询时会展示开发者、签名状态和公证状态。
+
+```bash
+npm i -g @wavever/buildby
+buildby --all
+```
+"""
+
+    monkeypatch.setattr("tgexporter.software_share.fetch_github_repo_info", fake_fetch)
+    monkeypatch.setattr("tgexporter.software_share.fetch_github_blob_text", fake_blob)
+
+    share = build_software_share(text, [], proxy_url=None)
+
+    assert share is not None
+    assert share.title == "buildby - 检测桌面应用是用什么技术构建的"
+    assert "为你撰写" not in share.text
+    assert "Electron、Tauri、Flutter" in share.text
+    assert "npm i -g @wavever/buildby" in share.text
+    assert [link.url for link in share.links] == ["https://github.com/wavever/buildby"]
 
 
 def test_download_link_images_uses_first_picture_index(tmp_path: Path, monkeypatch):
@@ -809,4 +856,5 @@ def test_source_login_prompt_detects_login_or_subscription_sites():
     from tgexporter.source_sites import source_rule_for_url
 
     assert should_prompt_source_login(source_rule_for_url("https://x.com/SpaceXAI/status/1"))
+    assert should_prompt_source_login(source_rule_for_url("https://www.axios.com/2026/07/20/ai-us-china-open-source-kimi"))
     assert should_prompt_source_login(source_rule_for_url("https://www.theinformation.com/articles/example"))

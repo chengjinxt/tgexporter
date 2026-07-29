@@ -23,6 +23,32 @@ DEFAULT_HUMAN_PAUSE_MS = (900, 1800)
 MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)\s]+)\)")
 URL_ONLY_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
 NEW_ARTICLE_LABELS = ["新建内容", "添加图文", "新建图文", "新增图文"]
+ARTICLE_SUFFIXES = {".md", ".mk"}
+P_STYLE = "margin: 0 0 18px; color: #2b2f36; font-size: 16px; line-height: 1.85; letter-spacing: 0;"
+H1_STYLE = (
+    "margin: 0 0 22px; padding-bottom: 10px; border-bottom: 1px solid #e5e7eb; "
+    "color: #111827; font-size: 26px; line-height: 1.35; font-weight: 700; letter-spacing: 0;"
+)
+H2_STYLE = (
+    "margin: 28px 0 14px; padding-left: 10px; border-left: 4px solid #07c160; "
+    "color: #111827; font-size: 20px; line-height: 1.45; font-weight: 700; letter-spacing: 0;"
+)
+H3_STYLE = "margin: 22px 0 12px; color: #111827; font-size: 17px; line-height: 1.55; font-weight: 700; letter-spacing: 0;"
+QUOTE_STYLE = (
+    "margin: 18px 0; padding: 12px 14px; border-left: 4px solid #d0d7de; "
+    "background: #f6f8fa; color: #57606a; font-size: 15px; line-height: 1.8; letter-spacing: 0;"
+)
+UL_STYLE = "margin: 0 0 18px 1.2em; padding: 0; color: #2b2f36; font-size: 16px; line-height: 1.85;"
+LI_STYLE = "margin: 0 0 8px; padding-left: 2px;"
+PRE_STYLE = (
+    "margin: 18px 0; padding: 12px 14px; background: #f6f8fa; border: 1px solid #e5e7eb; "
+    "border-radius: 4px; color: #24292f; font-size: 14px; line-height: 1.7; white-space: pre-wrap; "
+    "word-break: break-word; overflow-wrap: anywhere;"
+)
+INLINE_CODE_STYLE = (
+    "padding: 2px 5px; margin: 0 2px; border-radius: 3px; background: #f6f8fa; "
+    "color: #d14; font-family: Consolas, Menlo, Monaco, monospace; font-size: 0.92em;"
+)
 
 
 @dataclass(frozen=True)
@@ -226,60 +252,154 @@ def markdown_to_wechat_html(
 ) -> str:
     base_dir = article.source_path.parent
     blocks: list[str] = []
-    paragraph: list[str] = []
+    markdown_buffer: list[str] = []
 
-    def flush_paragraph() -> None:
-        if paragraph:
-            blocks.append(f"<p>{'<br>'.join(paragraph)}</p>")
-            paragraph.clear()
+    def flush_markdown_buffer() -> None:
+        if markdown_buffer:
+            blocks.extend(render_wechat_markdown_blocks(markdown_buffer, include_h1=include_title))
+            markdown_buffer.clear()
 
     lines = article.body_markdown.splitlines()
     for index, raw_line in enumerate(lines):
         line = raw_line.rstrip()
         if not line:
-            flush_paragraph()
+            markdown_buffer.append("")
             continue
         if is_channel_promo_line(line):
-            flush_paragraph()
+            flush_markdown_buffer()
             continue
         image = re.match(r"!\[(?P<alt>.*?)\]\((?P<src>.*?)\)", line)
         if image:
-            flush_paragraph()
+            flush_markdown_buffer()
             if not include_images:
                 continue
             src = resolve_markdown_image_asset(base_dir, image.group("src"), embed_local_images=embed_local_images)
             alt = html.escape(image.group("alt"))
-            blocks.append(f'<p><img src="{html.escape(src)}" alt="{alt}"></p>')
+            blocks.append(
+                f'<p style="{P_STYLE}"><img src="{html.escape(src)}" alt="{alt}" '
+                'style="max-width:100%;display:block;margin:0 auto 18px;"></p>'
+            )
             continue
         video = re.match(r"(?:视频：)?\[(?P<label>.*?)\]\((?P<src>.*?\.(?:mp4|mov|webm))\)", line, re.I)
         if video:
-            flush_paragraph()
+            flush_markdown_buffer()
             src_value = video.group("src")
             if render_local_videos or src_value.startswith(("http://", "https://")):
                 src = resolve_markdown_asset(base_dir, src_value)
                 label = html.escape(video.group("label"))
-                blocks.append(f'<p>{label}</p><video controls src="{html.escape(src)}"></video>')
-            continue
-        if line.startswith("# "):
-            flush_paragraph()
-            title_text = line[2:].strip()
-            if include_title:
-                blocks.append(f"<h1>{html.escape(title_text)}</h1>")
-            continue
-        if line.startswith("## "):
-            flush_paragraph()
-            blocks.append(f"<h2>{markdown_inline_to_html(line[3:].strip())}</h2>")
-            continue
-        if line.startswith("- "):
-            flush_paragraph()
-            blocks.append(f"<p>{markdown_inline_to_html(line[2:].strip())}</p>")
+                blocks.append(
+                    f'<p style="{P_STYLE}">{label}</p>'
+                    f'<video controls src="{html.escape(src)}" style="max-width:100%;display:block;margin:0 auto 18px;"></video>'
+                )
             continue
         if skip_duplicate_intro and not is_reference_label_line(lines, index) and is_duplicate_title(line, article.title):
             continue
-        paragraph.append(markdown_inline_to_html(line))
+        markdown_buffer.append(line)
 
-    flush_paragraph()
+    flush_markdown_buffer()
     return "\n".join(blocks)
+
+
+def render_wechat_markdown_blocks(lines: list[str], include_h1: bool = True) -> list[str]:
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    list_items: list[str] = []
+    list_ordered = False
+    quote_lines: list[str] = []
+    code_lines: list[str] = []
+    in_code = False
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            content = "<br>".join(markdown_inline_to_html(item) for item in paragraph)
+            blocks.append(f'<p style="{P_STYLE}">{content}</p>')
+            paragraph.clear()
+
+    def flush_list() -> None:
+        nonlocal list_ordered
+        if list_items:
+            tag = "ol" if list_ordered else "ul"
+            items_html = "".join(f'<li style="{LI_STYLE}">{item}</li>' for item in list_items)
+            blocks.append(f'<{tag} style="{UL_STYLE}">{items_html}</{tag}>')
+            list_items.clear()
+            list_ordered = False
+
+    def flush_quote() -> None:
+        if quote_lines:
+            content = "<br>".join(markdown_inline_to_html(item) for item in quote_lines)
+            blocks.append(f'<blockquote style="{QUOTE_STYLE}">{content}</blockquote>')
+            quote_lines.clear()
+
+    def flush_code() -> None:
+        if code_lines:
+            code = html.escape("\n".join(code_lines))
+            blocks.append(f'<pre style="{PRE_STYLE}"><code>{code}</code></pre>')
+            code_lines.clear()
+
+    def flush_all_text() -> None:
+        flush_paragraph()
+        flush_list()
+        flush_quote()
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if line.strip().startswith("```"):
+            if in_code:
+                flush_code()
+                in_code = False
+            else:
+                flush_all_text()
+                in_code = True
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+        if not line.strip():
+            flush_all_text()
+            continue
+        stripped = line.strip()
+        if re.fullmatch(r"[-*_]{3,}", stripped):
+            flush_all_text()
+            blocks.append('<hr style="border:0;border-top:1px solid #e5e7eb;margin:24px 0;">')
+            continue
+        if stripped.startswith(">"):
+            flush_paragraph()
+            flush_list()
+            quote_lines.append(stripped.lstrip("> ").strip())
+            continue
+        heading = re.match(r"^(#{1,3})\s+(?P<title>.+)$", stripped)
+        if heading:
+            flush_all_text()
+            level = len(heading.group(1))
+            title = markdown_inline_to_html(heading.group("title").strip())
+            if level == 1:
+                if include_h1:
+                    blocks.append(f'<h1 style="{H1_STYLE}">{title}</h1>')
+            elif level == 2:
+                blocks.append(f'<h2 style="{H2_STYLE}">{title}</h2>')
+            else:
+                blocks.append(f'<h3 style="{H3_STYLE}">{title}</h3>')
+            continue
+        bullet = re.match(r"^[-*+]\s+(?P<value>.+)$", stripped)
+        ordered = re.match(r"^\d+[.)、]\s+(?P<value>.+)$", stripped)
+        if bullet or ordered:
+            flush_paragraph()
+            flush_quote()
+            ordered_line = ordered is not None
+            if list_items and list_ordered != ordered_line:
+                flush_list()
+            list_ordered = ordered_line
+            value = (ordered or bullet).group("value")
+            list_items.append(markdown_inline_to_html(value.strip()))
+            continue
+        flush_list()
+        flush_quote()
+        paragraph.append(line)
+
+    if in_code:
+        flush_code()
+    flush_all_text()
+    return blocks
 
 
 def normalize_title_text(value: str) -> str:
@@ -330,13 +450,33 @@ def markdown_inline_to_html(value: str) -> str:
     parts: list[str] = []
     last = 0
     for match in MARKDOWN_LINK_RE.finditer(value):
-        parts.append(html.escape(value[last : match.start()]))
-        label = html.escape(match.group("label").strip())
+        parts.append(markdown_plain_inline_to_html(value[last : match.start()]))
+        label = markdown_plain_inline_to_html(match.group("label").strip())
         url = html.escape(match.group("url").strip(), quote=True)
-        parts.append(f'<a href="{url}">{label}</a>')
+        parts.append(f'<a href="{url}" style="color:#576b95;text-decoration:underline;">{label}</a>')
         last = match.end()
-    parts.append(html.escape(value[last:]))
+    parts.append(markdown_plain_inline_to_html(value[last:]))
     return "".join(parts)
+
+
+def markdown_plain_inline_to_html(value: str) -> str:
+    parts: list[str] = []
+    last = 0
+    for match in re.finditer(r"`([^`]+)`", value):
+        parts.append(apply_basic_inline_markdown(html.escape(value[last : match.start()])))
+        code = html.escape(match.group(1).strip())
+        parts.append(f'<code style="{INLINE_CODE_STYLE}">{code}</code>')
+        last = match.end()
+    parts.append(apply_basic_inline_markdown(html.escape(value[last:])))
+    return "".join(parts)
+
+
+def apply_basic_inline_markdown(value: str) -> str:
+    value = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", value)
+    value = re.sub(r"__(.+?)__", r"<strong>\1</strong>", value)
+    value = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", value)
+    value = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<em>\1</em>", value)
+    return value
 
 
 def resolve_markdown_asset(base_dir: Path, value: str) -> str:
@@ -733,26 +873,27 @@ def fill_article_body_with_local_uploads(page, article: WechatArticle) -> None:
 def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Path]]:
     base_dir = article.source_path.parent
     items: list[tuple[str, str | Path]] = []
-    paragraph: list[str] = []
+    markdown_buffer: list[str] = []
 
-    def flush_paragraph() -> None:
-        if paragraph:
-            items.append(("html", f"<p>{'<br>'.join(paragraph)}</p>"))
-            paragraph.clear()
+    def flush_markdown_buffer() -> None:
+        if markdown_buffer:
+            for block in render_wechat_markdown_blocks(markdown_buffer, include_h1=False):
+                items.append(("html", block))
+            markdown_buffer.clear()
 
     lines = article.body_markdown.splitlines()
     for index, raw_line in enumerate(lines):
         line = raw_line.rstrip()
         if not line:
-            flush_paragraph()
+            markdown_buffer.append("")
             continue
         if is_channel_promo_line(line):
-            flush_paragraph()
+            flush_markdown_buffer()
             continue
 
         image = re.match(r"!\[(?P<alt>.*?)\]\((?P<src>.*?)\)", line)
         if image:
-            flush_paragraph()
+            flush_markdown_buffer()
             src = image.group("src")
             if src.startswith(("http://", "https://", "data:", "file://")):
                 continue
@@ -763,25 +904,17 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
 
         video = re.match(r"(?:视频：)?\[(?P<label>.*?)\]\((?P<src>.*?\.(?:mp4|mov|webm))\)", line, re.I)
         if video:
-            flush_paragraph()
+            flush_markdown_buffer()
             continue
 
         if line.startswith("# "):
-            flush_paragraph()
-            continue
-        if line.startswith("## "):
-            flush_paragraph()
-            items.append(("html", f"<h2>{markdown_inline_to_html(line[3:].strip())}</h2>"))
-            continue
-        if line.startswith("- "):
-            flush_paragraph()
-            items.append(("html", f"<p>{markdown_inline_to_html(line[2:].strip())}</p>"))
+            flush_markdown_buffer()
             continue
         if not is_reference_label_line(lines, index) and is_duplicate_title(line, article.title):
             continue
-        paragraph.append(markdown_inline_to_html(line))
+        markdown_buffer.append(line)
 
-    flush_paragraph()
+    flush_markdown_buffer()
     return items
 
 

@@ -7,13 +7,17 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .link_enricher import ExtraLink, build_opener, extract_urls
 from .models import LinkRef
 from .text_filters import is_channel_promo_line
 
 GITHUB_RE = re.compile(r"^https?://github\.com/(?P<owner>[^/\s]+)/(?P<repo>[^/\s#?]+)", re.IGNORECASE)
+GITHUB_README_BLOB_RE = re.compile(
+    r"^https?://github\.com/[^/\s]+/[^/\s]+/blob/[^?#\s]+/README[^?#\s]*\.md",
+    re.IGNORECASE,
+)
 VIDEO_URL_RE = re.compile(r"https?://[^\s<>()\"']+\.(?:mp4|webm)(?:\?[^\s<>()\"']*)?", re.IGNORECASE)
 GITHUB_ATTACHMENT_VIDEO_RE = re.compile(
     r"https?://github\.com/user-attachments/assets/[0-9a-fA-F-]+", re.IGNORECASE
@@ -57,6 +61,11 @@ def build_software_share(
     if not repo_url:
         return None
     repo_info = fetch_github_repo_info(repo_url, proxy_url=proxy_url)
+    readme_blob_url = first_github_readme_blob_url(raw_text, links, extra_links)
+    if readme_blob_url:
+        blob_readme = fetch_github_blob_text(readme_blob_url, proxy_url=proxy_url)
+        if blob_readme:
+            repo_info = replace(repo_info, readme=blob_readme)
     intro_title = find_software_intro_title(raw_text) or repo_title_from_info(repo_info)
     title = normalize_software_title(intro_title, repo_info)
     clean_links = build_software_links(raw_text, links, repo_info)
@@ -86,6 +95,20 @@ def first_github_repo_url(
         normalized = normalize_github_repo_url(url)
         if normalized:
             return normalized
+    return None
+
+
+def first_github_readme_blob_url(
+    raw_text: str,
+    links: list[LinkRef],
+    extra_links: list[ExtraLink] | None = None,
+) -> str | None:
+    candidates = extract_urls(raw_text)
+    candidates.extend(link.url for link in links)
+    candidates.extend(item.url for item in extra_links or [])
+    for url in candidates:
+        if GITHUB_README_BLOB_RE.match(url.strip()):
+            return url.strip()
     return None
 
 
@@ -145,6 +168,30 @@ def fetch_github_readme(owner: str, repo: str, proxy_url: str | None = None, tim
         return ""
 
 
+def fetch_github_blob_text(url: str, proxy_url: str | None = None, timeout: int = 12) -> str:
+    raw_url = github_blob_to_raw_url(url)
+    if not raw_url:
+        return ""
+    try:
+        request = urllib.request.Request(raw_url, headers={"User-Agent": "tgexporter/0.1"})
+        with build_opener(proxy_url).open(request, timeout=timeout) as response:
+            return response.read(1_000_000).decode("utf-8", errors="ignore")
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return ""
+
+
+def github_blob_to_raw_url(url: str) -> str | None:
+    parsed = urllib.parse.urlparse(url.strip())
+    if parsed.netloc.lower() != "github.com":
+        return None
+    parts = parsed.path.strip("/").split("/")
+    if len(parts) < 5 or parts[2] != "blob":
+        return None
+    owner, repo, branch = parts[0], parts[1], parts[3]
+    path = "/".join(urllib.parse.quote(part) for part in parts[4:])
+    return f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}"
+
+
 def github_headers() -> dict[str, str]:
     return {
         "User-Agent": "tgexporter/0.1",
@@ -193,22 +240,29 @@ def short_description(value: str, max_length: int = 42) -> str:
 def build_software_body(raw_text: str, title: str, repo_info: GitHubRepoInfo, demo_urls: list[str]) -> str:
     source_summary = clean_original_summary(raw_text, title)
     readme_points = summarize_readme_in_chinese(repo_info)
+    usage_commands = find_usage_commands(repo_info.readme)
+    product_name = title.split(" - ", 1)[0].strip() or display_repo_name(repo_info.repo)
     paragraphs: list[str] = []
     if source_summary:
         paragraphs.append(source_summary)
     elif repo_info.description:
-        paragraphs.append(repo_info.description)
+        paragraphs.append(f"{product_name} 是一个开源项目，核心定位是：{repo_info.description.rstrip('。')}。")
+    else:
+        paragraphs.append(f"{product_name} 是一个值得关注的开源项目，适合下载安装到本地或直接阅读源码了解实现思路。")
     if readme_points:
-        paragraphs.append("README 中文总结：\n" + "\n".join(f"- {point}" for point in readme_points[:5]))
+        paragraphs.append("## 它能解决什么问题？\n" + "\n".join(f"- {point}" for point in readme_points[:4]))
+    if usage_commands:
+        paragraphs.append("## 快速上手\n```bash\n" + "\n".join(usage_commands[:4]) + "\n```")
     meta_parts = []
     if repo_info.language:
         meta_parts.append(f"主要技术栈：{repo_info.language}")
     if repo_info.stars:
         meta_parts.append(f"GitHub Stars：{repo_info.stars}")
     if meta_parts:
-        paragraphs.append("项目概况：" + "；".join(meta_parts) + "。")
+        paragraphs.append("## 项目概况\n" + "；".join(meta_parts) + "。")
     if demo_urls:
-        paragraphs.append("已优先补充项目 README 或演示站中的主要界面图，方便直接查看实际效果。")
+        paragraphs.append("## 实际效果\n如果项目提供演示站，程序会优先截取演示页面或 README 中的主要界面图，方便直接看到使用效果。")
+    paragraphs.append("## 开源地址")
     return "\n\n".join(paragraphs).strip()
 
 
@@ -229,6 +283,8 @@ def clean_original_summary(raw_text: str, title: str) -> str:
             skip_generated_block = False
             if lines and lines[-1] != "":
                 lines.append("")
+            continue
+        if should_skip_ai_meta_line(line):
             continue
         if should_skip_previous_render_line(line):
             skip_generated_block = True
@@ -275,6 +331,22 @@ def should_skip_previous_render_line(line: str) -> bool:
     return False
 
 
+def should_skip_ai_meta_line(line: str) -> bool:
+    stripped = line.strip()
+    markers = (
+        "为你撰写",
+        "非常适合在微信公众号发布",
+        "文章排版结构清晰",
+        "语言生动活泼",
+        "兼具实用性与技术趣味",
+        "以下是一篇",
+        "下面是一篇",
+        "我来帮你",
+        "可以参考以下推文",
+    )
+    return any(marker in stripped for marker in markers)
+
+
 def extract_readme_points(readme: str) -> list[str]:
     points: list[str] = []
     for raw_line in readme.splitlines():
@@ -306,6 +378,26 @@ def summarize_readme_in_chinese(repo_info: GitHubRepoInfo) -> list[str]:
     if not points and repo_info.description:
         points.append(f"项目定位：{repo_info.description.rstrip('。')}")
     return points[:5]
+
+
+def find_usage_commands(readme: str) -> list[str]:
+    commands: list[str] = []
+    in_code = False
+    for raw_line in (readme or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            in_code = not in_code
+            continue
+        if not line:
+            continue
+        candidate = line.lstrip("$> ").strip()
+        if not in_code and not looks_like_command_line(candidate):
+            continue
+        if looks_like_command_line(candidate) and candidate not in commands:
+            commands.append(candidate)
+        if len(commands) >= 6:
+            break
+    return commands
 
 
 def extract_chinese_readme_points(readme: str) -> list[str]:
@@ -431,7 +523,7 @@ def build_software_links(raw_text: str, links: list[LinkRef], repo_info: GitHubR
     result: list[LinkRef] = []
     append_link(result, LinkRef(name="GitHub 开源地址", url=repo_info.html_url))
     for url in extract_urls(raw_text):
-        if should_skip_source_url(url):
+        if should_skip_source_url(url) or GITHUB_README_BLOB_RE.match(url.strip()):
             continue
         name = infer_link_name(raw_text, url, links)
         append_link(result, LinkRef(name=name, url=url))
