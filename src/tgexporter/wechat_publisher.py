@@ -711,34 +711,50 @@ def fill_current_wechat_article(page, article: WechatArticle, index: int) -> Non
 
 def add_wechat_article_slot(page, index: int) -> None:
     close_wechat_search_component_dialog(page)
-    page.mouse.wheel(0, -2000)
-    human_pause(page, 800, 1500)
-    before_count = count_sidebar_article_cards(page)
-    if click_new_article_button_in_sidebar(page):
-        print(f"Adding WeChat article slot {index} via left sidebar button.", flush=True)
-        human_pause(page, 1000, 2000)
-        if click_write_new_article_option(page):
-            human_pause(page, 1800, 3200)
+    last_count = count_sidebar_article_cards(page)
+    for attempt in range(1, 4):
+        page.mouse.wheel(0, -2400)
+        human_pause(page, 800, 1500)
+        before_count = count_sidebar_article_cards(page)
+        if click_new_article_button_in_sidebar(page):
+            print(f"Adding WeChat article slot {index} via left sidebar button.", flush=True)
+            human_pause(page, 1000, 2000)
+            clicked_option = click_write_new_article_option(page)
+            if clicked_option:
+                human_pause(page, 1800, 3200)
+            else:
+                print("WeChat new article menu option not found; checking whether editor switched directly.", flush=True)
+            if activate_new_article_editor(page, index, before_count):
+                return
+        elif click_new_article_button_by_text(page):
+            print(f"Adding WeChat article slot {index} via text fallback.", flush=True)
+            human_pause(page, 1000, 2000)
+            clicked_option = click_write_new_article_option(page)
+            if clicked_option:
+                human_pause(page, 1800, 3200)
+            if activate_new_article_editor(page, index, before_count):
+                return
         else:
-            print("WeChat new article menu option not found; checking whether editor switched directly.", flush=True)
-        activate_new_article_editor(page, index, before_count)
-        return
-    if click_new_article_button_by_text(page):
-        human_pause(page, 1000, 2000)
-        if click_write_new_article_option(page):
-            human_pause(page, 1800, 3200)
-        activate_new_article_editor(page, index, before_count)
-        return
+            print(f"WeChat new article button not found on attempt {attempt}; retrying.", flush=True)
+        current_count = count_sidebar_article_cards(page)
+        if current_count > last_count and title_is_blank_or_placeholder(page):
+            return
+        last_count = max(last_count, current_count)
+        close_wechat_search_component_dialog(page)
+        close_visible_popovers(page)
+        human_pause(page, 900, 1700)
     raise RuntimeError(f"Could not add WeChat sub-article slot {index}.")
 
 
-def activate_new_article_editor(page, index: int, before_count: int) -> None:
-    wait_for_sidebar_article_card_count(page, before_count + 1)
-    for attempt in range(6):
+def activate_new_article_editor(page, index: int, before_count: int) -> bool:
+    reached_count = wait_for_sidebar_article_card_count(page, before_count + 1)
+    for attempt in range(8):
         if title_is_blank_or_placeholder(page):
             wait_for_editor_ready(page)
-            return
-        if click_blank_sidebar_article_card(page):
+            return True
+        if reached_count and click_newest_sidebar_article_card_after_count(page, before_count):
+            human_pause(page, 900, 1700)
+        elif click_blank_sidebar_article_card(page):
             human_pause(page, 900, 1700)
         elif click_newest_unselected_sidebar_article_card(page):
             human_pause(page, 900, 1700)
@@ -746,9 +762,10 @@ def activate_new_article_editor(page, index: int, before_count: int) -> None:
             human_pause(page, 900, 1700)
         wait_for_editor_ready(page)
         if title_is_blank_or_placeholder(page):
-            return
+            return True
         page.wait_for_timeout(700)
-    raise RuntimeError(f"WeChat sub-article slot {index} did not become active before filling.")
+    print(f"WeChat sub-article slot {index} did not become active on this attempt.", flush=True)
+    return False
 
 
 def wait_for_blank_title(page, index: int, timeout_seconds: int = 10) -> None:
@@ -1430,7 +1447,62 @@ def click_write_new_article_option(page) -> bool:
             return True
         except Exception:
             continue
-    return click_visible_text(page, "写新文章")
+    return click_visible_text(page, "写新文章") or click_write_new_article_option_by_dom(page)
+
+
+def click_write_new_article_option_by_dom(page) -> bool:
+    try:
+        point = page.evaluate(
+            """() => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 20 &&
+                            rect.height > 12 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const candidates = [...document.querySelectorAll('button, a, span, div, li')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const text = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                            const inToolbar = Boolean(el.closest('[role="toolbar"], .toolbar, [class*="toolbar"], [class*="tool_bar"], [class*="edui-toolbar"]'));
+                            return {el, rect, text, inToolbar};
+                        })
+                        .filter(({rect, text, inToolbar}) =>
+                            !inToolbar &&
+                            /写新文章|新建图文|图文消息/.test(text) &&
+                            rect.left >= 0 &&
+                            rect.left < 620 &&
+                            rect.top > 80
+                        )
+                        .sort((a, b) => a.rect.width * a.rect.height - b.rect.width * b.rect.height);
+                    if (!candidates.length) return null;
+                    const rect = candidates[0].rect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                }"""
+        )
+        if not point:
+            return False
+        print("Choosing WeChat new article option via DOM fallback.", flush=True)
+        page.mouse.click(point["x"], point["y"])
+        return True
+    except Exception:
+        return False
+
+
+def close_visible_popovers(page) -> None:
+    try:
+        page.keyboard.press("Escape")
+        human_pause(page, 300, 700)
+    except Exception:
+        pass
 
 
 def count_sidebar_article_cards(page) -> int:
@@ -1466,18 +1538,29 @@ def count_sidebar_article_cards(page) -> int:
                                 rect.left < 430 &&
                                 rect.right <= 470 &&
                                 rect.top > 60 &&
+                                rect.height >= 36 &&
+                                rect.height <= 180 &&
                                 text &&
                                 !/新建内容|历史版本|原创|广告|留言/.test(text) &&
                                 (hasMedia || text.length > 8 || text === '标题')
                             );
-                        const centers = [];
+                        cards.sort((a, b) => a.rect.top - b.rect.top || b.rect.height - a.rect.height);
+                        const groups = [];
                         for (const item of cards) {
-                            const cy = Math.round(item.rect.top + item.rect.height / 2);
-                            if (!centers.some((other) => Math.abs(other - cy) < 8)) {
-                                centers.push(cy);
+                            const top = Math.round(item.rect.top);
+                            const bottom = Math.round(item.rect.bottom);
+                            const overlap = groups.find((group) =>
+                                Math.min(group.bottom, bottom) - Math.max(group.top, top) > 18 ||
+                                Math.abs(group.top - top) < 16
+                            );
+                            if (overlap) {
+                                overlap.top = Math.min(overlap.top, top);
+                                overlap.bottom = Math.max(overlap.bottom, bottom);
+                            } else {
+                                groups.push({top, bottom});
                             }
                         }
-                        return centers.length;
+                        return groups.length;
                     }"""
             )
         )
@@ -1498,6 +1581,82 @@ def wait_for_sidebar_article_card_count(page, expected_count: int, timeout_secon
         flush=True,
     )
     return False
+
+
+def click_newest_sidebar_article_card_after_count(page, before_count: int) -> bool:
+    try:
+        point = page.evaluate(
+            """(beforeCount) => {
+                    const visible = (node) => {
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 60 &&
+                            rect.height > 36 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.pointerEvents !== 'none';
+                    };
+                    const rawCandidates = [...document.querySelectorAll('li, div, a')]
+                        .filter(visible)
+                        .map((el) => {
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            const text = (el.innerText || el.textContent || '').trim();
+                            const hasMedia = Boolean(el.querySelector('img')) || style.backgroundImage !== 'none';
+                            const inDialog = Boolean(el.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover, .weui-desktop-popover'));
+                            return {el, rect, text, hasMedia, inDialog};
+                        })
+                        .filter(({rect, text, hasMedia, inDialog}) =>
+                            !inDialog &&
+                            rect.left >= 0 &&
+                            rect.left < 430 &&
+                            rect.right <= 470 &&
+                            rect.top > 60 &&
+                            rect.height >= 36 &&
+                            rect.height <= 180 &&
+                            text &&
+                            !/新建内容|添加|历史版本|操作时间|操作人|来源|操作|原创|广告|留言/.test(text) &&
+                            (hasMedia || text.length > 2 || text === '标题')
+                        )
+                        .sort((a, b) => a.rect.top - b.rect.top || b.rect.height - a.rect.height);
+                    const groups = [];
+                    for (const item of rawCandidates) {
+                        const top = Math.round(item.rect.top);
+                        const bottom = Math.round(item.rect.bottom);
+                        const group = groups.find((current) =>
+                            Math.min(current.bottom, bottom) - Math.max(current.top, top) > 18 ||
+                            Math.abs(current.top - top) < 16
+                        );
+                        if (group) {
+                            group.top = Math.min(group.top, top);
+                            group.bottom = Math.max(group.bottom, bottom);
+                            if (item.rect.width * item.rect.height > group.area) {
+                                group.el = item.el;
+                                group.rect = item.rect;
+                                group.area = item.rect.width * item.rect.height;
+                            }
+                        } else {
+                            groups.push({top, bottom, el: item.el, rect: item.rect, area: item.rect.width * item.rect.height});
+                        }
+                    }
+                    if (groups.length <= beforeCount || !groups.length) return null;
+                    groups.sort((a, b) => b.top - a.top);
+                    const rect = groups[0].rect;
+                    return {x: rect.left + rect.width / 2, y: rect.top + Math.min(rect.height / 2, 62)};
+                }""",
+            before_count,
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        human_pause(page, 800, 1500)
+        return True
+    except Exception:
+        return False
 
 
 def click_blank_sidebar_article_card(page) -> bool:
