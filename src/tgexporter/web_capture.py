@@ -253,6 +253,8 @@ def is_blocked_page(page) -> bool:
     hostname = (urlparse(page.url).hostname or "").removeprefix("www.").lower()
     if hostname == "reuters.com" and title.lower() in {"reuters.com", "www.reuters.com"} and len(body_text) < 30:
         return True
+    if hostname == "wsj.com" and title.lower() in {"wsj.com", "www.wsj.com"} and len(body_text) < 30:
+        return True
     marker = f"{page.url}\n{title}\n{body_text[:800]}".lower()
     return any(item in marker for item in BLOCKED_PAGE_MARKERS)
 
@@ -299,6 +301,7 @@ def screenshot_article_region(page, destination: Path) -> bool:
                 ],
                 'm.weibo.cn': ['article', '[class*="card"]', '[class*="weibo"]', 'main'],
                 'reuters.com': ['article', '[data-testid*="Article"]', 'main'],
+                'wsj.com': ['article', '[data-testid*="article"]', '[class*="article"]', 'main', 'figure'],
                 'theinformation.com': ['article', 'main', '[class*="article"]'],
                 'cls.cn': ['.detail-content', '.article-content', '.article', '.detail', 'main'],
             };

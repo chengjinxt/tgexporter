@@ -24,6 +24,7 @@ IGNORED_IMAGE_KEYWORDS = (
     "avatar",
     "head.jpg",
     "icon",
+    "images/v2/t.png",
     "logo",
     "qbitai_icon",
     "qrcode",

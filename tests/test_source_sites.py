@@ -62,6 +62,26 @@ def test_source_rule_records_reuters_browser_image_strategy():
     assert "401" in rule.notes
 
 
+def test_source_rule_records_ithome_placeholder_filter_strategy():
+    rule = source_rule_for_url("https://www.ithome.com/0/983/943.htm")
+
+    assert rule is not None
+    assert rule.domain == "ithome.com"
+    assert "newsuploadfiles" in rule.resource_method
+    assert "t.png" in rule.notes
+
+
+def test_source_rule_records_wsj_login_or_verification_strategy():
+    rule = source_rule_for_url(
+        "https://www.wsj.com/tech/ai/anthropic-ai-models-hacked-three-companies-during-tests-bd752c86"
+    )
+
+    assert rule is not None
+    assert rule.domain == "wsj.com"
+    assert "images.wsj.net" in rule.resource_method
+    assert "人机验证" in rule.login_requirement
+
+
 def test_source_rule_records_cls_body_screenshot_fallback():
     rule = source_rule_for_url("https://www.cls.cn/detail/2427193")
 

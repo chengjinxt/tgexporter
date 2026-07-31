@@ -43,7 +43,14 @@ WECHAT_BARE_LINK_LINE_RE = re.compile(
     r"^(?P<url>https?://mp\.weixin\.qq\.com/[^\s)）]+)\s*$",
     re.IGNORECASE,
 )
-BROWSER_IMAGE_SOURCE_DOMAINS = {"fifa.com", "axios.com", "theinformation.com", "reuters.com"}
+BROWSER_IMAGE_SOURCE_DOMAINS = {
+    "fifa.com",
+    "axios.com",
+    "theinformation.com",
+    "reuters.com",
+    "ithome.com",
+    "wsj.com",
+}
 
 
 class TelegramCollector:
@@ -331,10 +338,11 @@ class TelegramCollector:
         seen: set[str] = set()
         for link in article.links:
             for image_url in link_image_candidates(link):
-                if image_url in seen:
+                download_url = source_image_download_url(image_url)
+                if download_url in seen:
                     continue
-                seen.add(image_url)
-                extension = extension_from_url(image_url, ".jpg")
+                seen.add(download_url)
+                extension = extension_from_url(download_url, ".jpg")
                 filename = media_filename(
                     article.date_key,
                     article.daily_index,
@@ -344,7 +352,7 @@ class TelegramCollector:
                     extension,
                 )
                 destination = date_dir / filename
-                if not download_web_file(image_url, destination, proxy_url=self.proxy_url, referer=link.url):
+                if not download_web_file(download_url, destination, proxy_url=self.proxy_url, referer=link.url):
                     continue
                 if not is_suitable_article_image(destination):
                     destination.unlink(missing_ok=True)
@@ -389,19 +397,20 @@ class TelegramCollector:
             if rule is None or rule.domain not in BROWSER_IMAGE_SOURCE_DOMAINS:
                 continue
             for image_url in extract_source_image_urls(link.url, profile_dir=self.source_profile_dir):
-                if image_url in seen:
+                download_url = source_image_download_url(image_url)
+                if download_url in seen:
                     continue
-                seen.add(image_url)
+                seen.add(download_url)
                 filename = media_filename(
                     article.date_key,
                     article.daily_index,
                     "PIC",
                     1,
                     article.title,
-                    extension_from_url(image_url, ".jpg"),
+                    extension_from_url(download_url, ".jpg"),
                 )
                 destination = date_dir / filename
-                if not download_web_file(image_url, destination, proxy_url=self.proxy_url, referer=link.url):
+                if not download_web_file(download_url, destination, proxy_url=self.proxy_url, referer=link.url):
                     continue
                 if not is_suitable_article_image(destination):
                     destination.unlink(missing_ok=True)
@@ -1093,6 +1102,19 @@ def extension_from_url(url: str, fallback: str) -> str:
     if suffix.lower() in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
         return suffix
     return fallback
+
+
+def source_image_download_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname.endswith("ithome.com") and "format,f_avif" in urllib.parse.unquote(parsed.query).lower():
+        query_items = [
+            (key, value)
+            for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+            if not (key.lower() == "x-bce-process" and "format,f_avif" in value.lower())
+        ]
+        return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query_items, doseq=True)))
+    return url
 
 
 def download_web_file(url: str, destination: Path, proxy_url: str | None = None, referer: str | None = None) -> bool:

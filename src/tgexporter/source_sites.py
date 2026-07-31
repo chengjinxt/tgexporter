@@ -59,9 +59,18 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "ithome.com": SourceSiteRule(
         domain="ithome.com",
         name="IT之家",
-        resource_method="OpenGraph / 正文 img",
+        resource_method="优先过滤 OpenGraph 占位图；浏览器渲染后提取 newsuploadfiles 正文新闻图 URL 下载",
         fallback_method="浏览器截图或 Google 图片搜索",
-        notes="通常有可直接下载的新闻配图。",
+        notes="部分文章的 og:image 是 images/v2/t.png 占位图，必须跳过后再取正文图。",
+    ),
+    "wsj.com": SourceSiteRule(
+        domain="wsj.com",
+        name="Wall Street Journal",
+        resource_method="浏览器渲染后提取 images.wsj.net 正文新闻图 URL；若出现验证页则停止截图并提示 source-login",
+        fallback_method="source-login 完成人机验证后重试；仍失败则 Google 图片搜索同标题相似配图",
+        notes="匿名或自动浏览器可能看到“访问暂时受限 / 我不是机器人”页面，不能把验证页截图当文章图。",
+        login_requirement="可能需要登录或人机验证",
+        login_hint="如果看到 WSJ 访问受限或机器人验证页，先运行 source-login 完成验证。",
     ),
     "reuters.com": SourceSiteRule(
         domain="reuters.com",

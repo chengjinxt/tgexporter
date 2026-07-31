@@ -46,3 +46,14 @@ def test_find_page_image_urls_skips_logo_qrcode_and_keeps_article_images():
     assert find_page_image_urls(html, "https://www.qbitai.com/2026/07/447873.html") == (
         "https://i.qbitai.com/wp-content/uploads/2026/07/a429490b5ed4bf0189b5e4e2701f7330.png",
     )
+
+
+def test_find_page_image_urls_skips_ithome_placeholder_image():
+    html = """
+    <meta property="og:image" content="https://img.ithome.com/images/v2/t.png">
+    <img src="https://img.ithome.com/newsuploadfiles/2026/7/59545f80-d793-4c7f-ad16-fc34a3f424c2.jpg">
+    """
+
+    assert find_page_image_urls(html, "https://www.ithome.com/0/983/943.htm") == (
+        "https://img.ithome.com/newsuploadfiles/2026/7/59545f80-d793-4c7f-ad16-fc34a3f424c2.jpg",
+    )

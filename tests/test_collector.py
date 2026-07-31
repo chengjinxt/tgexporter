@@ -791,6 +791,54 @@ def test_download_browser_link_images_includes_reuters_domain(tmp_path: Path, mo
     assert assets[0].filename == "20260720_002_PIC_001_中国开始量产国产 DUV 光刻机 今年目标生产约 5 台.jpg"
 
 
+def test_download_browser_link_images_includes_ithome_domain(tmp_path: Path, monkeypatch):
+    captured: list[tuple[str, str | None]] = []
+
+    def fake_extract(url, timeout_ms=30000, profile_dir=None, limit=8):
+        assert "ithome.com" in url
+        return ["https://img.ithome.com/newsuploadfiles/2026/7/article-photo.jpg?x-bce-process=image/auto-orient,o_1/format,f_avif"]
+
+    def fake_download(url, destination, proxy_url=None, referer=None):
+        captured.append((url, referer))
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+        Path(destination).write_bytes(b"ithome-image")
+        return True
+
+    monkeypatch.setattr(collector_module, "extract_source_image_urls", fake_extract)
+    monkeypatch.setattr(collector_module, "download_web_file", fake_download)
+    monkeypatch.setattr(collector_module, "is_suitable_article_image", lambda path: True)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 7, 31, tzinfo=UTC),
+        date_key="20260731",
+        daily_index=3,
+        title="特斯拉车机更新，引入豆包和宠物模式",
+        text="正文",
+        links=[LinkRef(name="IT之家", url="https://www.ithome.com/0/983/943.htm")],
+    )
+
+    assets = collector._download_browser_link_images(article, tmp_path / "发布内容" / "20260731")
+
+    assert len(assets) == 1
+    assert assets[0].source == "web_browser_image"
+    assert assets[0].filename == "20260731_003_PIC_001_特斯拉车机更新，引入豆包和宠物模式.jpg"
+    assert captured == [
+        (
+            "https://img.ithome.com/newsuploadfiles/2026/7/article-photo.jpg",
+            "https://www.ithome.com/0/983/943.htm",
+        )
+    ]
+
+
 def test_internal_processing_error_is_not_silently_skipped(tmp_path: Path, monkeypatch):
     collector = TelegramCollector(
         client=FakeBotClient(),
@@ -858,3 +906,4 @@ def test_source_login_prompt_detects_login_or_subscription_sites():
     assert should_prompt_source_login(source_rule_for_url("https://x.com/SpaceXAI/status/1"))
     assert should_prompt_source_login(source_rule_for_url("https://www.axios.com/2026/07/20/ai-us-china-open-source-kimi"))
     assert should_prompt_source_login(source_rule_for_url("https://www.theinformation.com/articles/example"))
+    assert should_prompt_source_login(source_rule_for_url("https://www.wsj.com/tech/ai/example"))
