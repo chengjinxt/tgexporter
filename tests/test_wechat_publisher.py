@@ -5,14 +5,19 @@ import pytest
 
 from tgexporter import cli as cli_module
 from tgexporter.cli import (
+    article_account,
+    batch_size_for_account,
     build_parser,
     chunk_articles,
     collect_markdown_local_assets,
     move_published_batch,
     next_batch_index,
     resolve_publish_articles,
+    validate_publish_account,
+    wechat_profile_dir_for_account,
 )
-from tgexporter.draft_runner import DailyDraftRunner, DraftRunOptions
+from tgexporter.config import load_config
+from tgexporter.draft_runner import DailyDraftRunner, DailyDraftTarget, DraftRunOptions
 from tgexporter.wechat_publisher import (
     build_wechat_body_items,
     clean_wechat_title,
@@ -236,6 +241,43 @@ def test_wechat_publish_accepts_article_dir(tmp_path):
     articles = resolve_publish_articles(args.article, args.article_dir)
 
     assert [path.name for path in articles] == ["001-first.md", "002-second.md", "003-third.mk"]
+
+
+def test_wechat_publish_accepts_movie_account():
+    args = build_parser().parse_args(["publish-wechat", "--account", "movie4k", "--article-dir", "movies"])
+
+    assert args.account == "movie4k"
+
+
+def test_publish_account_validation_rejects_mixed_movie_and_default_articles(tmp_path):
+    movie = tmp_path / "movie.md"
+    movie.write_text(
+        """---
+title: "电影"
+route: "movie4k"
+account: "movie4k"
+---
+
+# 电影
+""",
+        encoding="utf-8",
+    )
+    tech = tmp_path / "tech.md"
+    tech.write_text("# 科技", encoding="utf-8")
+
+    assert article_account(movie) == "movie4k"
+    validate_publish_account([movie], "movie4k")
+    with pytest.raises(RuntimeError, match="Article account mismatch"):
+        validate_publish_account([tech], "movie4k")
+    with pytest.raises(RuntimeError, match="Article account mismatch"):
+        validate_publish_account([movie], "default")
+
+
+def test_movie_account_uses_dedicated_profile_and_batch_size(tmp_path):
+    config = load_config(tmp_path)
+
+    assert wechat_profile_dir_for_account(config, "movie4k") == tmp_path / "runtime" / "wechat-profile-movie4k"
+    assert batch_size_for_account(config, "movie4k") == 2
 
 
 def test_mk_wechat_conversion_uses_wechat_styled_blocks(tmp_path):
@@ -462,3 +504,31 @@ def test_daily_draft_runner_ignores_previous_date_directories(tmp_path):
 
     assert publisher.batches == []
     assert sorted(path.name for path in old_dir.glob("*.md")) == [f"{index + 1:03d}-old.md" for index in range(8)]
+
+
+def test_daily_draft_runner_publishes_movie_target_in_batches_of_two(tmp_path):
+    movie_dir = tmp_path / "发布内容" / "4K影视屋" / "20260801"
+    movie_dir.mkdir(parents=True)
+    for index in range(3):
+        write_article(movie_dir / f"{index + 1:03d}-movie.md")
+    publisher = FakeDraftPublisher()
+    runner = DailyDraftRunner(
+        collector=object(),
+        publisher=FakeDraftPublisher(),
+        output_base_dir=tmp_path / "发布内容",
+        options=DraftRunOptions(poll_timeout_seconds=1),
+        targets=[
+            DailyDraftTarget(
+                name="movie4k",
+                article_base_dir=tmp_path / "发布内容" / "4K影视屋",
+                publisher=publisher,
+                batch_size=2,
+            )
+        ],
+    )
+
+    runner.publish_due_batches(datetime(2026, 8, 1, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+
+    assert publisher.batches == [["001-movie.md", "002-movie.md"]]
+    assert len(list((movie_dir / "第1批").glob("*.md"))) == 2
+    assert [path.name for path in movie_dir.glob("*.md")] == ["003-movie.md"]

@@ -37,6 +37,10 @@ class ArticleDraft:
     media: list[MediaAsset] = field(default_factory=list)
     status: str = "collected"
     source_id: str | None = None
+    route: str = "default"
+    account: str = "default"
+    output_subdir: str = ""
+    cover_brand: str = "firemail 科技频道"
 
     @property
     def prefix(self) -> str:

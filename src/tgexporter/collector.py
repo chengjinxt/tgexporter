@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
+from .config import ContentRouteConfig, default_content_routes
 from .filename import (
     extension_from_file_path,
     extension_from_mime,
@@ -63,6 +64,7 @@ class TelegramCollector:
         timezone: str = "Asia/Shanghai",
         proxy_url: str | None = None,
         source_profile_dir: Path | None = None,
+        routes: dict[str, ContentRouteConfig] | None = None,
     ) -> None:
         self.client = client
         self.state = state
@@ -71,6 +73,7 @@ class TelegramCollector:
         self.timezone = ZoneInfo(timezone)
         self.proxy_url = proxy_url
         self.source_profile_dir = source_profile_dir
+        self.routes = routes or default_content_routes()
         self._warned_source_login_domains: set[str] = set()
 
     def poll_once(self, timeout: int = 30, latest_only: bool = False) -> list[Path]:
@@ -202,6 +205,7 @@ class TelegramCollector:
         raw_text = apply_plain_wechat_markdown_links(collect_text(messages))
         grouped_id = first.get("media_group_id")
         extra_links = collect_entity_links(messages)
+        route = self._detect_route(messages, raw_text)
         links = enrich_links(
             raw_text,
             fetch_metadata=True,
@@ -210,15 +214,20 @@ class TelegramCollector:
             proxy_url=self.proxy_url,
         )
         links.extend(unique_links(enrich_wechat_article_links(raw_text, proxy_url=self.proxy_url), links))
-        software_share = build_software_share(raw_text, links, extra_links, proxy_url=self.proxy_url)
+        software_share = None if route.name != "default" else build_software_share(
+            raw_text,
+            links,
+            extra_links,
+            proxy_url=self.proxy_url,
+        )
         if software_share:
             title = software_share.title
             links = software_share.links
             text = software_share.text
         else:
-            title = derive_title(raw_text, message_ids[0])
+            title = derive_title(raw_text, message_ids[0], route=route)
             text = clean_article_text(raw_text, title, [link.name for link in links])
-        existing_path = self._find_existing_article(date_key, title)
+        existing_path = self._find_existing_article(date_key, title, route.output_subdir)
         if existing_path is not None:
             self.state.record_messages_processed(
                 self.channel,
@@ -239,9 +248,13 @@ class TelegramCollector:
             title=title,
             text=text,
             links=links,
+            route=route.name,
+            account=route.account,
+            output_subdir=route.output_subdir,
+            cover_brand=route.cover_brand,
         )
 
-        date_dir = self.renderer.base_dir / date_key
+        date_dir = self.renderer.date_dir(date_key, route.output_subdir)
         date_dir.mkdir(parents=True, exist_ok=True)
         article.media.extend(self._download_message_media(messages, article, date_dir))
         if software_share:
@@ -266,11 +279,11 @@ class TelegramCollector:
         self.state.record_article(article, markdown_path)
         return markdown_path
 
-    def _find_existing_article(self, date_key: str, title: str) -> Path | None:
+    def _find_existing_article(self, date_key: str, title: str, output_subdir: str = "") -> Path | None:
         state_path = self.state.article_path_by_title(self.channel, date_key, title)
         if state_path is not None:
             return state_path
-        return find_existing_markdown_by_title(self.renderer.base_dir / date_key, title)
+        return find_existing_markdown_by_title(self.renderer.date_dir(date_key, output_subdir), title)
 
     def _download_message_media(
         self,
@@ -587,7 +600,7 @@ class TelegramCollector:
             return []
         filename = media_filename(article.date_key, article.daily_index, "PIC", 1, article.title, ".jpg")
         destination = date_dir / filename
-        if not create_video_cover(videos[0].path, destination, article.title):
+        if not create_video_cover(videos[0].path, destination, article.title, brand=article.cover_brand):
             return []
         return [
             MediaAsset(
@@ -603,6 +616,15 @@ class TelegramCollector:
         username = normalize_channel(str(chat.get("username", "")))
         chat_id = str(chat.get("id", ""))
         return self.channel in {username, chat_id}
+
+    def _detect_route(self, messages: list[dict[str, Any]], raw_text: str) -> ContentRouteConfig:
+        usernames, titles = collect_route_source_signals(messages, raw_text)
+        for route in self.routes.values():
+            if route.name == "default":
+                continue
+            if route_matches(route, usernames, titles):
+                return route
+        return self.routes.get("default") or ContentRouteConfig(name="default")
 
 
 class MessageMedia:
@@ -625,6 +647,58 @@ class MessageMedia:
 
 def normalize_channel(channel: str) -> str:
     return channel.strip().removeprefix("@").lower()
+
+
+def collect_route_source_signals(messages: list[dict[str, Any]], raw_text: str) -> tuple[set[str], set[str]]:
+    usernames: set[str] = set()
+    titles: set[str] = set()
+    for message in messages:
+        for chat in iter_route_chats(message):
+            username = normalize_channel(str(chat.get("username", "")))
+            title = str(chat.get("title") or chat.get("first_name") or chat.get("last_name") or "").strip()
+            if username:
+                usernames.add(username)
+            if title:
+                titles.add(title)
+        forward_signature = str(message.get("forward_signature") or "").strip()
+        if forward_signature:
+            titles.add(forward_signature)
+    for match in re.finditer(r"https?://t\.me/(?P<username>[A-Za-z0-9_]+)", raw_text, flags=re.IGNORECASE):
+        usernames.add(normalize_channel(match.group("username")))
+    for raw_line in raw_text.splitlines():
+        match = re.match(r"\s*Channel\s*[:：]\s*(?P<title>.*?)(?:\s*\(|$)", raw_line, flags=re.IGNORECASE)
+        if match:
+            title = match.group("title").strip()
+            if title:
+                titles.add(title)
+    return usernames, titles
+
+
+def iter_route_chats(message: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    for key in ("chat", "forward_from_chat", "sender_chat"):
+        value = message.get(key)
+        if isinstance(value, dict):
+            yield value
+    forward_origin = message.get("forward_origin")
+    if isinstance(forward_origin, dict):
+        chat = forward_origin.get("chat")
+        if isinstance(chat, dict):
+            yield chat
+        sender_user = forward_origin.get("sender_user")
+        if isinstance(sender_user, dict):
+            yield sender_user
+
+
+def route_matches(route: ContentRouteConfig, usernames: set[str], titles: set[str]) -> bool:
+    route_usernames = {normalize_channel(item) for item in route.match_usernames}
+    if route_usernames & usernames:
+        return True
+    normalized_titles = {normalize_text(title) for title in titles if title}
+    for marker in route.match_titles:
+        normalized_marker = normalize_text(marker)
+        if normalized_marker and any(normalized_marker in title for title in normalized_titles):
+            return True
+    return False
 
 
 def collect_text(messages: list[dict[str, Any]]) -> str:
@@ -842,10 +916,12 @@ def select_latest_updates(updates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return selected
 
 
-def derive_title(text: str, message_id: int) -> str:
+def derive_title(text: str, message_id: int, route: ContentRouteConfig | None = None) -> str:
     for line in text.splitlines():
         candidate = line.strip().strip("#>-* ")
         if not candidate or candidate.startswith("http://") or candidate.startswith("https://"):
+            continue
+        if route and route.name != "default" and is_channel_promo_line(candidate):
             continue
         candidate = re.sub(r"\s+", " ", candidate)
         return sanitize_title(candidate, max_length=70)

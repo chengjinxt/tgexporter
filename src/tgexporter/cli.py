@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from .collector import TelegramCollector, is_transient_telegram_error, telegram_network_hint
-from .config import load_config, mask_secret, require_bot_token
-from .draft_runner import DraftRunOptions, create_daily_draft_runner
+from .config import Config, load_config, mask_secret, require_bot_token
+from .draft_runner import DailyDraftTarget, DraftRunOptions, create_daily_draft_runner
 from .markdown_renderer import MarkdownRenderer
 from .source_sites import source_rule_for_url
 from .state import StateStore
@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--draft",
         dest="one_click_draft",
         action="store_true",
-        help="Run all-day Telegram listener and save WeChat drafts in batches of 8, with a 23:00 daily flush.",
+        help="Run all-day Telegram listener and save WeChat drafts by route batch sizes, with a 23:00 daily flush.",
     )
     parser.add_argument(
         "--draft-check-interval",
@@ -145,11 +145,12 @@ def build_parser() -> argparse.ArgumentParser:
     publish_source.add_argument(
         "--article-dir",
         type=Path,
-        help="Directory containing Markdown articles. Direct child files are auto-filled in filename order and batched by 8.",
+        help="Directory containing Markdown articles. Direct child files are auto-filled in filename order and batched by the selected account.",
     )
     publish.add_argument("--auto-fill", action="store_true", help="Try filling WeChat editor automatically. Article directories use this by default.")
     publish.add_argument("--no-playwright", action="store_true", help="Use default browser instead of Playwright.")
     publish.add_argument("--headless", action="store_true", help="Run Playwright headless.")
+    publish.add_argument("--account", default="default", help="WeChat account/profile name. Use movie4k for 4K影视屋 drafts.")
     publish.add_argument("--login-timeout", type=int, default=180, help="Seconds to wait for WeChat browser login.")
     publish.add_argument("--review-timeout", type=int, default=0, help="Seconds to keep the browser open after auto-fill.")
     publish.set_defaults(func=cmd_publish_wechat)
@@ -266,7 +267,7 @@ def cmd_collect_web(args) -> int:
 def cmd_run(args) -> int:
     collector, config = build_collector(args.root, channel_override=args.channel, save_dir=args.save_dir)
     timeout = args.timeout or config.telegram.poll_timeout_seconds
-    publisher = WechatPublisher(config.wechat.profile_dir) if args.draft else None
+    publishers: dict[str, WechatPublisher] = {}
     if args.drop_pending:
         count = collector.drop_pending(timeout=1)
         print(f"Dropped {count} pending update(s).")
@@ -274,7 +275,12 @@ def cmd_run(args) -> int:
 
     def on_article(path: Path) -> None:
         print(f"Rendered: {path}")
-        if publisher:
+        if args.draft:
+            account = article_account(path)
+            publisher = publishers.get(account)
+            if publisher is None:
+                publisher = WechatPublisher(wechat_profile_dir_for_account(config, account))
+                publishers[account] = publisher
             preview = publisher.open_assisted(path, use_playwright=True)
             print(f"WeChat preview: {preview}")
 
@@ -296,6 +302,7 @@ def cmd_draft(args) -> int:
         output_base_dir=config.output.base_dir,
         wechat_profile_dir=config.wechat.profile_dir,
         timezone=config.output.timezone,
+        targets=build_draft_targets(config),
         options=DraftRunOptions(
             poll_timeout_seconds=config.telegram.poll_timeout_seconds,
             check_interval_seconds=max(1, int(args.draft_check_interval)),
@@ -311,8 +318,10 @@ def cmd_draft(args) -> int:
 
 def cmd_publish_wechat(args) -> int:
     config = load_config(args.root)
-    publisher = WechatPublisher(config.wechat.profile_dir)
+    account = args.account or "default"
+    publisher = WechatPublisher(wechat_profile_dir_for_account(config, account))
     articles = resolve_publish_articles(args.article, args.article_dir)
+    validate_publish_account(articles, account)
     if args.article_dir is not None:
         previews = publish_article_dir_batches(
             publisher=publisher,
@@ -322,6 +331,7 @@ def cmd_publish_wechat(args) -> int:
             headless=args.headless,
             login_timeout_seconds=args.login_timeout,
             review_timeout_seconds=args.review_timeout,
+            batch_size=batch_size_for_account(config, account),
         )
         for preview in previews:
             print(f"WeChat preview: {preview}")
@@ -368,10 +378,12 @@ def publish_article_dir_batches(
     headless: bool,
     login_timeout_seconds: int,
     review_timeout_seconds: int,
+    batch_size: int = MAX_WECHAT_ARTICLES,
 ) -> list[Path]:
     previews: list[Path] = []
-    batches = chunk_articles(articles, MAX_WECHAT_ARTICLES)
-    should_archive = len(articles) > MAX_WECHAT_ARTICLES
+    batch_size = max(1, min(MAX_WECHAT_ARTICLES, batch_size))
+    batches = chunk_articles(articles, batch_size)
+    should_archive = len(articles) > batch_size
     next_index = next_batch_index(article_dir)
     for offset, batch in enumerate(batches):
         batch_number = next_index + offset
@@ -451,6 +463,81 @@ def is_external_asset_target(target: str) -> bool:
     return lower.startswith(("http://", "https://", "data:", "file://", "#"))
 
 
+def build_draft_targets(config: Config) -> list[DailyDraftTarget]:
+    targets: list[DailyDraftTarget] = []
+    for route in sorted(config.routes.values(), key=lambda item: (item.name != "default", item.name)):
+        profile_dir = wechat_profile_dir_for_account(config, route.account)
+        base_dir = config.output.base_dir / route.output_subdir if route.output_subdir else config.output.base_dir
+        targets.append(
+            DailyDraftTarget(
+                name=route.name,
+                article_base_dir=base_dir,
+                publisher=WechatPublisher(profile_dir),
+                batch_size=route.batch_size,
+            )
+        )
+    return targets
+
+
+def wechat_profile_dir_for_account(config: Config, account: str) -> Path:
+    account_name = account or "default"
+    account_config = config.wechat_accounts.get(account_name)
+    if account_config is None:
+        known = ", ".join(sorted(config.wechat_accounts)) or "default"
+        raise RuntimeError(f"Unknown WeChat account: {account_name}. Known accounts: {known}")
+    return account_config.profile_dir
+
+
+def batch_size_for_account(config: Config, account: str) -> int:
+    sizes = [route.batch_size for route in config.routes.values() if route.account == account]
+    return sizes[0] if sizes else MAX_WECHAT_ARTICLES
+
+
+def validate_publish_account(article_paths: list[Path], account: str) -> None:
+    selected = account or "default"
+    mismatches: list[tuple[Path, str]] = []
+    for path in article_paths:
+        current = article_account(path)
+        if current != selected:
+            mismatches.append((path, current))
+    if mismatches:
+        details = "; ".join(f"{path.name}: {current}" for path, current in mismatches[:5])
+        raise RuntimeError(
+            f"Article account mismatch for --account {selected}. "
+            f"Move articles to the correct directory or use the matching --account. {details}"
+        )
+
+
+def article_account(path: Path) -> str:
+    frontmatter = read_markdown_frontmatter(path)
+    account = frontmatter.get("account", "").strip()
+    if account:
+        return account
+    route = frontmatter.get("route", "").strip()
+    if route == "movie4k":
+        return "movie4k"
+    return "default"
+
+
+def read_markdown_frontmatter(path: Path) -> dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---\n"):
+        return {}
+    end = text.find("\n---", 4)
+    if end == -1:
+        return {}
+    result: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        result[key.strip()] = value.strip().strip('"').strip("'")
+    return result
+
+
 def build_collector(
     root: Path,
     channel_override: str | None = None,
@@ -469,6 +556,7 @@ def build_collector(
         timezone=config.output.timezone,
         proxy_url=config.telegram.proxy_url,
         source_profile_dir=config.source.profile_dir,
+        routes=config.routes,
     )
     return collector, config
 

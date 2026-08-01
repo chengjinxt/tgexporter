@@ -13,6 +13,12 @@ profile_dir = "runtime/wechat-profile"
 default_mode = "draft"
 author = "程锦学堂"
 
+[wechat_accounts.default]
+profile_dir = "runtime/wechat-profile"
+
+[wechat_accounts.movie4k]
+profile_dir = "runtime/wechat-profile-movie4k"
+
 [source]
 profile_dir = "runtime/source-profile"
 
@@ -27,3 +33,11 @@ api_id = ""
 api_hash = ""
 phone = ""
 session_file = "data/telegram.session"
+
+[routes.movie4k]
+output_subdir = "4K影视屋"
+account = "movie4k"
+cover_brand = "剪辑探索者"
+batch_size = 2
+match_usernames = ["dianying4K"]
+match_titles = ["4K影视屋"]

@@ -22,7 +22,7 @@ from tgexporter.collector import (
 )
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.link_enricher import PageMetadata
-from tgexporter.models import ArticleDraft, LinkRef
+from tgexporter.models import ArticleDraft, LinkRef, MediaAsset
 from tgexporter.software_share import GitHubRepoInfo, build_software_share, find_software_intro_title
 from tgexporter.state import StateStore
 from tgexporter.telegram_bot import TelegramBotError
@@ -249,6 +249,119 @@ BleepingComputer
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
+
+
+def test_movie4k_forwarded_post_uses_first_line_and_movie_directory(tmp_path: Path):
+    state = StateStore(tmp_path / "state.sqlite")
+    renderer = MarkdownRenderer(tmp_path / "发布内容")
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=state,
+        renderer=renderer,
+        channel="TechnologyNewsSyncAssistant",
+    )
+    updates = [
+        {
+            "update_id": 101,
+            "channel_post": {
+                "message_id": 21,
+                "date": int(datetime(2026, 8, 1, 10, 0, tzinfo=UTC).timestamp()),
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "forward_origin": {
+                    "type": "channel",
+                    "chat": {"id": -1002, "username": "dianying4K", "title": "4K影视屋(分屋）-蓝光无损电影"},
+                    "message_id": 9,
+                },
+                "caption": (
+                    "哥斯拉金刚新作《帝王计划2》新片段，荆棘野猪回归，怪兽惊魂秃鹫首亮相！\n"
+                    "哥斯拉、金刚回归大战神一般的深海触手巨兽“泰坦X”！\n\n"
+                    "投稿: @pinuo_bot\n"
+                    "Channel:4K影视屋分屋 (https://t.me/dianying4K)"
+                ),
+                "photo": [{"file_id": "movie-cover", "file_size": 20}],
+            },
+        }
+    ]
+
+    paths = collector.process_updates(updates)
+
+    assert len(paths) == 1
+    path = paths[0]
+    assert path.parent == tmp_path / "发布内容" / "4K影视屋" / "20260801"
+    text = path.read_text(encoding="utf-8")
+    assert 'title: "哥斯拉金刚新作《帝王计划2》新片段，荆棘野猪回归，怪兽惊魂秃鹫首亮相！"' in text
+    assert 'route: "movie4k"' in text
+    assert 'account: "movie4k"' in text
+    assert "哥斯拉、金刚回归" in text
+    assert "投稿" not in text
+    assert "Channel:" not in text
+
+
+def test_movie4k_route_detects_channel_line_without_forward_origin(tmp_path: Path):
+    state = StateStore(tmp_path / "state.sqlite")
+    renderer = MarkdownRenderer(tmp_path / "发布内容")
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=state,
+        renderer=renderer,
+        channel="TechnologyNewsSyncAssistant",
+    )
+    updates = [
+        {
+            "update_id": 102,
+            "channel_post": {
+                "message_id": 22,
+                "date": int(datetime(2026, 8, 1, 10, 5, tzinfo=UTC).timestamp()),
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "caption": "电影标题第一行\n正文\nChannel:4K影视屋分屋 (https://t.me/dianying4K)",
+                "photo": [{"file_id": "movie-cover-2", "file_size": 20}],
+            },
+        }
+    ]
+
+    paths = collector.process_updates(updates)
+
+    assert paths[0].parent == tmp_path / "发布内容" / "4K影视屋" / "20260801"
+
+
+def test_movie4k_video_cover_uses_movie_brand(tmp_path: Path, monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_create_video_cover(video_path, output_path, title, brand="firemail 科技频道"):
+        captured["brand"] = brand
+        Path(output_path).write_bytes(b"cover")
+        return True
+
+    monkeypatch.setattr(collector_module, "create_video_cover", fake_create_video_cover)
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="TechnologyNewsSyncAssistant",
+    )
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"video")
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 8, 1, tzinfo=UTC),
+        date_key="20260801",
+        daily_index=1,
+        title="电影标题",
+        text="正文",
+        media=[MediaAsset(kind="video", filename="clip.mp4", path=video, source="telegram")],
+        route="movie4k",
+        account="movie4k",
+        output_subdir="4K影视屋",
+        cover_brand="剪辑探索者",
+    )
+
+    assets = collector._create_video_cover(article, tmp_path)
+
+    assert len(assets) == 1
+    assert captured["brand"] == "剪辑探索者"
 
 
 def test_software_share_uses_product_title_and_filters_promo(monkeypatch):

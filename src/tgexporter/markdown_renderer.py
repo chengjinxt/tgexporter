@@ -12,11 +12,15 @@ class MarkdownRenderer:
         self.base_dir = base_dir
 
     def render(self, article: ArticleDraft) -> Path:
-        date_dir = self.base_dir / article.date_key
+        date_dir = self.date_dir(article.date_key, article.output_subdir)
         date_dir.mkdir(parents=True, exist_ok=True)
         path = date_dir / article_filename(article.date_key, article.daily_index, article.title)
         path.write_text(self.to_markdown(article), encoding="utf-8")
         return path
+
+    def date_dir(self, date_key: str, output_subdir: str = "") -> Path:
+        base_dir = self.base_dir / output_subdir if output_subdir else self.base_dir
+        return base_dir / date_key
 
     def to_markdown(self, article: ArticleDraft) -> str:
         lines: list[str] = [
@@ -25,6 +29,8 @@ class MarkdownRenderer:
             f"date: {article.published_at.strftime('%Y-%m-%d %H:%M:%S')}",
             f"source: {article.source}",
             f"channel: {article.channel}",
+            f"route: {quote_yaml(article.route)}",
+            f"account: {quote_yaml(article.account)}",
         ]
         if article.message_ids:
             lines.append("message_ids:")

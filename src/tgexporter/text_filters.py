@@ -11,6 +11,8 @@ def is_channel_promo_line(line: str) -> bool:
     normalized = normalize_text(line)
     if not normalized:
         return False
+    if is_submission_line(line) or is_forward_channel_line(line):
+        return True
     fixed_markers = ("在花频道", "茶馆水群", "投稿通道")
     if any(normalize_text(marker) in normalized for marker in fixed_markers):
         return True
@@ -19,3 +21,11 @@ def is_channel_promo_line(line: str) -> bool:
     promo_terms = ("频道", "群组", "群", "投稿", "网站", "吹水")
     matched_terms = {term for term in promo_terms if term in line}
     return "频道" in matched_terms and "投稿" in matched_terms and len(matched_terms) >= 3
+
+
+def is_submission_line(line: str) -> bool:
+    return bool(re.match(r"^\s*投稿\s*[:：]\s*@?[A-Za-z0-9_]+(?:\s*)$", line))
+
+
+def is_forward_channel_line(line: str) -> bool:
+    return bool(re.match(r"^\s*Channel\s*[:：].*(?:t\.me/|4K影视屋)", line, flags=re.IGNORECASE))
