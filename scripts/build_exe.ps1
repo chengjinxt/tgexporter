@@ -42,6 +42,7 @@ try {
     if (!(Test-Path $Exe)) {
         throw "Expected exe was not generated: $Exe"
     }
+    Copy-Item -LiteralPath (Join-Path $Root "config.example.toml") -Destination (Join-Path $PortableDir "config.example.toml") -Force
     Compress-Archive -Path (Join-Path $PortableDir "*") -DestinationPath $PortableZip -Force
     Write-Host "Built portable folder: $PortableDir"
     Write-Host "Built portable zip:    $PortableZip"

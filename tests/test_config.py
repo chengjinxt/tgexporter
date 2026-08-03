@@ -28,3 +28,28 @@ match_titles = ["4K影视屋"]
     assert route.batch_size == 2
     assert route.match_usernames == ("dianying4k",)
     assert route.match_titles == ("4K影视屋",)
+
+
+def test_env_sources_do_not_override_config_local(tmp_path, monkeypatch):
+    monkeypatch.setenv("TG_BOT_TOKEN", "system-env-token")
+    monkeypatch.setenv("TG_CHANNEL", "SystemEnvChannel")
+    (tmp_path / ".env").write_text(
+        """
+TG_BOT_TOKEN=env-file-token
+TG_CHANNEL=EnvFileChannel
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "config.local.toml").write_text(
+        """
+[telegram]
+bot_token = "toml-token"
+channel = "TomlChannel"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(tmp_path)
+
+    assert config.telegram.bot_token == "toml-token"
+    assert config.telegram.channel == "TomlChannel"

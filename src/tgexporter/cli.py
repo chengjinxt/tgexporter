@@ -93,13 +93,13 @@ def build_parser() -> argparse.ArgumentParser:
     collect_web.add_argument(
         "--group",
         default=None,
-        help="Web source group to collect. Defaults to WEB_SOURCE_GROUP or chunhui-xuefu.",
+        help="Web source group to collect. Defaults to [web_sources].default_group or chunhui-xuefu.",
     )
     collect_web.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="Maximum new articles to render per run. Defaults to WEB_SOURCE_LIMIT or 1.",
+        help="Maximum new articles to render per run. Defaults to [web_sources].max_articles_per_run or 1.",
     )
     collect_web.add_argument(
         "--interval-seconds",
@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def add_channel_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--channel", default=None, help="Telegram channel username. Overrides TG_CHANNEL for this run.")
+    parser.add_argument("--channel", default=None, help="Telegram channel username. Overrides [telegram].channel for this run.")
 
 
 def default_root() -> Path:
@@ -173,7 +173,7 @@ def default_root() -> Path:
         executable_dir.parent.parent,
     ]
     for candidate in candidates:
-        if any((candidate / name).exists() for name in (".env", "config.local.toml", "pyproject.toml")):
+        if any((candidate / name).exists() for name in ("config.local.toml", "pyproject.toml")):
             return candidate
     return executable_dir
 

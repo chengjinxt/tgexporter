@@ -11,7 +11,7 @@ timezone = "Asia/Shanghai"
 [wechat]
 profile_dir = "runtime/wechat-profile"
 default_mode = "draft"
-author = "程锦学堂"
+author = "成进学堂"
 
 [wechat_accounts.default]
 profile_dir = "runtime/wechat-profile"

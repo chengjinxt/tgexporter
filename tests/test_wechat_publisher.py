@@ -342,7 +342,7 @@ def test_default_root_for_frozen_portable_prefers_project_root(tmp_path, monkeyp
     portable.mkdir(parents=True)
     executable = portable / "tgexporter.exe"
     executable.write_bytes(b"exe")
-    (project / ".env").write_text("TG_BOT_TOKEN=x", encoding="utf-8")
+    (project / "config.local.toml").write_text("[telegram]\nbot_token = \"x\"\n", encoding="utf-8")
 
     monkeypatch.chdir(portable)
     monkeypatch.setattr(cli_module.sys, "frozen", True, raising=False)
