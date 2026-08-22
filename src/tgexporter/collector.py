@@ -52,6 +52,39 @@ BROWSER_IMAGE_SOURCE_DOMAINS = {
     "ithome.com",
     "wsj.com",
 }
+MOVIE_RESOURCE_TITLE_RE = re.compile(r"^\s*名称\s*[:：]\s*\S+", re.IGNORECASE)
+MOVIE_RESOURCE_MARKERS = (
+    "4k",
+    "web-dl",
+    "webdl",
+    "1080p",
+    "2160p",
+    "remux",
+    "uhd",
+    "sdr",
+    "杜比",
+    "内封",
+    "简繁英",
+    "双语",
+    "高码率",
+    "剧版",
+    "两季合集",
+    "剧情",
+    "喜剧",
+    "科幻",
+    "动作",
+    "标签：",
+    "📁",
+    "🏷",
+)
+MOVIE_RESOURCE_LINK_MARKERS = (
+    "pan.quark.cn",
+    "pan.baidu.com",
+    "pan.xunlei.com",
+    "115cdn.com",
+    "aliyundrive.com",
+    "alipan.com",
+)
 
 
 class TelegramCollector:
@@ -619,6 +652,9 @@ class TelegramCollector:
 
     def _detect_route(self, messages: list[dict[str, Any]], raw_text: str) -> ContentRouteConfig:
         usernames, titles = collect_route_source_signals(messages, raw_text)
+        movie_route = self.routes.get("movie4k")
+        if movie_route and is_movie4k_resource_text(raw_text):
+            return movie_route
         for route in self.routes.values():
             if route.name == "default":
                 continue
@@ -699,6 +735,16 @@ def route_matches(route: ContentRouteConfig, usernames: set[str], titles: set[st
         if normalized_marker and any(normalized_marker in title for title in normalized_titles):
             return True
     return False
+
+
+def is_movie4k_resource_text(text: str) -> bool:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or not MOVIE_RESOURCE_TITLE_RE.match(lines[0]):
+        return False
+    normalized = normalize_text(text)
+    marker_count = sum(1 for marker in MOVIE_RESOURCE_MARKERS if normalize_text(marker) in normalized)
+    has_resource_link = any(marker in text.lower() for marker in MOVIE_RESOURCE_LINK_MARKERS)
+    return has_resource_link or marker_count >= 2
 
 
 def collect_text(messages: list[dict[str, Any]]) -> str:

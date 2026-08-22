@@ -324,6 +324,54 @@ def test_movie4k_route_detects_channel_line_without_forward_origin(tmp_path: Pat
     assert paths[0].parent == tmp_path / "发布内容" / "4K影视屋" / "20260801"
 
 
+def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_path: Path):
+    state = StateStore(tmp_path / "state.sqlite")
+    renderer = MarkdownRenderer(tmp_path / "发布内容")
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=state,
+        renderer=renderer,
+        channel="TechnologyNewsSyncAssistant",
+    )
+    updates = [
+        {
+            "update_id": 103,
+            "channel_post": {
+                "message_id": 23,
+                "date": int(datetime(2026, 8, 1, 10, 10, tzinfo=UTC).timestamp()),
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "caption": (
+                    "名称：侵略机器(2026)【4K.SDR&DV双版本】【高码率】【内封简繁英】【科幻、动作】\n\n"
+                    "描述：未来世界动作科幻片。\n\n"
+                    "夸克：https://pan.quark.cn/s/example\n"
+                    "🏷 标签：#科幻 #动作 #4K"
+                ),
+                "photo": [{"file_id": "movie-resource-cover", "file_size": 20}],
+            },
+        },
+        {
+            "update_id": 104,
+            "channel_post": {
+                "message_id": 24,
+                "date": int(datetime(2026, 8, 1, 10, 15, tzinfo=UTC).timestamp()),
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "caption": (
+                    "名称：泰迪熊 剧版(两季合集)【WEB-DL.1080p】【内封简繁英】【剧情、喜剧】\n\n"
+                    "描述：喜剧剧集合集。"
+                ),
+                "photo": [{"file_id": "movie-resource-cover-2", "file_size": 20}],
+            },
+        },
+    ]
+
+    paths = collector.process_updates(updates)
+
+    assert len(paths) == 2
+    assert all(path.parent == tmp_path / "发布内容" / "4K影视屋" / "20260801" for path in paths)
+    assert all('route: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
+    assert all('account: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
+
+
 def test_movie4k_video_cover_uses_movie_brand(tmp_path: Path, monkeypatch):
     captured: dict[str, str] = {}
 
