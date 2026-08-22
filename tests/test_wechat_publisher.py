@@ -21,6 +21,7 @@ from tgexporter.draft_runner import DailyDraftRunner, DailyDraftTarget, DraftRun
 from tgexporter.wechat_publisher import (
     build_wechat_body_items,
     clean_wechat_title,
+    close_wechat_editor_blocking_overlays,
     markdown_to_wechat_html,
     parse_markdown_article,
     validate_wechat_article_count,
@@ -42,9 +43,41 @@ class FakeDraftPublisher:
         return article_paths[0].with_suffix(".html")
 
 
+class FakeKeyboard:
+    def __init__(self) -> None:
+        self.pressed: list[str] = []
+
+    def press(self, key: str) -> None:
+        self.pressed.append(key)
+
+
+class FakeOverlayPage:
+    def __init__(self, result: dict) -> None:
+        self.keyboard = FakeKeyboard()
+        self.result = result
+        self.script = ""
+        self.waits: list[int] = []
+
+    def evaluate(self, script: str):
+        self.script = script
+        return self.result
+
+    def wait_for_timeout(self, ms: int) -> None:
+        self.waits.append(ms)
+
+
 def write_article(path, image_name=None):
     image_block = f"\n![cover]({image_name})\n" if image_name else ""
     path.write_text(f"# {path.stem}\n{image_block}\n正文", encoding="utf-8")
+
+
+def test_close_wechat_editor_blocking_overlays_handles_topic_card_sticker():
+    page = FakeOverlayPage({"clicked": False, "hidden": 1})
+
+    assert close_wechat_editor_blocking_overlays(page) is True
+    assert page.keyboard.pressed == ["Escape"]
+    assert "topic_card_sticker" in page.script
+    assert "data-codex-hidden-overlay" in page.script
 
 
 def test_wechat_preview_converts_markdown_assets(tmp_path):

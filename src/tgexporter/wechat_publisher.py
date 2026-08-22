@@ -870,6 +870,7 @@ def fill_body(page, body_html: str) -> None:
 def fill_article_body_with_local_uploads(page, article: WechatArticle) -> None:
     items = build_wechat_body_items(article)
     fill_body(page, "")
+    close_wechat_editor_blocking_overlays(page)
     focus_body_editor(page, at_start=True)
     if not items:
         return
@@ -939,7 +940,14 @@ def focus_body_editor(page, at_start: bool = False, at_end: bool = False) -> Non
     body = find_body_editor(page)
     if body is None:
         raise RuntimeError("No visible WeChat body editor found.")
-    body.click(timeout=3000)
+    close_wechat_editor_blocking_overlays(page)
+    try:
+        body.click(timeout=3000)
+    except Exception:
+        if close_wechat_editor_blocking_overlays(page):
+            body.click(timeout=3000)
+        else:
+            body.evaluate("node => node.focus()", timeout=3000)
     assert_active_editor_is_not_title(page)
     if at_start or at_end:
         set_body_cursor(body, to_start=at_start)
@@ -1503,6 +1511,110 @@ def close_visible_popovers(page) -> None:
         human_pause(page, 300, 700)
     except Exception:
         pass
+
+
+def close_wechat_editor_blocking_overlays(page) -> bool:
+    try:
+        page.keyboard.press("Escape")
+        human_pause(page, 200, 500)
+    except Exception:
+        pass
+    try:
+        result = page.evaluate(
+            """() => {
+                    const visible = (node) => {
+                        if (!node) return false;
+                        const rect = node.getBoundingClientRect();
+                        const style = window.getComputedStyle(node);
+                        return rect.width > 0 &&
+                            rect.height > 0 &&
+                            rect.bottom > 0 &&
+                            rect.right > 0 &&
+                            rect.top < window.innerHeight &&
+                            rect.left < window.innerWidth &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none' &&
+                            style.opacity !== '0';
+                    };
+                    const nearestOverlay = (node) =>
+                        node.closest('[data-transfer="true"], [v-transfer-dom], [weui="true"], [role="dialog"], .weui-desktop-dialog__wrp, .weui-desktop-dialog, .dialog_wrp, .popover') ||
+                        node.parentElement;
+                    const roots = new Set();
+                    document
+                        .querySelectorAll('img[src*="topic_card"], img[src*="topic_card_sticker"], img[src*="sticker_edu"]')
+                        .forEach((img) => {
+                            const src = String(img.getAttribute('src') || '');
+                            if (visible(img) && /topic_card|topic_card_sticker|sticker_edu/.test(src)) {
+                                roots.add(nearestOverlay(img));
+                            }
+                        });
+                    document
+                        .querySelectorAll('[data-transfer="true"], [v-transfer-dom], [weui="true"], [role="dialog"], .weui-desktop-dialog__wrp, .weui-desktop-dialog, .dialog_wrp, .popover')
+                        .forEach((node) => {
+                            if (!visible(node)) return;
+                            const rect = node.getBoundingClientRect();
+                            const text = (node.innerText || node.textContent || '').trim();
+                            const hasTopicImage = Boolean(node.querySelector('img[src*="topic_card"], img[src*="topic_card_sticker"], img[src*="sticker_edu"]'));
+                            const coversEditor = rect.width > 180 && rect.height > 120 && rect.left < window.innerWidth * 0.85 && rect.right > window.innerWidth * 0.2;
+                            if ((hasTopicImage || /话题|选题|卡片|贴纸|教育|写作|推荐/.test(text)) && coversEditor) {
+                                roots.add(node);
+                            }
+                        });
+                    const overlays = [...roots].filter(visible);
+                    for (const root of overlays) {
+                        const close = [...root.querySelectorAll('button, a, i, span, div')]
+                            .map((el) => {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                const text = (el.innerText || el.textContent || '').trim();
+                                const label = [
+                                    text,
+                                    el.getAttribute('aria-label') || '',
+                                    el.getAttribute('title') || '',
+                                    String(el.className || ''),
+                                ].join(' ');
+                                return {el, rect, style, label, area: rect.width * rect.height};
+                            })
+                            .filter(({rect, style, label, area}) =>
+                                area > 0 &&
+                                area < 6000 &&
+                                rect.bottom > 0 &&
+                                rect.right > 0 &&
+                                rect.top < window.innerHeight &&
+                                rect.left < window.innerWidth &&
+                                style.visibility !== 'hidden' &&
+                                style.display !== 'none' &&
+                                style.pointerEvents !== 'none' &&
+                                (/^(×|x)$/i.test(label.trim()) || /close|cancel|关闭|取消|知道了|我知道了/.test(label))
+                            )
+                            .sort((a, b) => b.rect.top - a.rect.top || b.rect.right - a.rect.right);
+                        if (close.length) {
+                            close[0].el.click();
+                            return {clicked: true, hidden: 0};
+                        }
+                    }
+                    let hidden = 0;
+                    for (const root of overlays) {
+                        root.setAttribute('data-codex-hidden-overlay', '1');
+                        root.style.setProperty('pointer-events', 'none', 'important');
+                        root.style.setProperty('display', 'none', 'important');
+                        hidden += 1;
+                    }
+                    return {clicked: false, hidden};
+                }"""
+        )
+        if isinstance(result, dict):
+            if result.get("clicked"):
+                print("WeChat editor blocking overlay closed.", flush=True)
+                human_pause(page, 500, 1000)
+                return True
+            if result.get("hidden"):
+                print("WeChat editor blocking overlay hidden.", flush=True)
+                human_pause(page, 300, 700)
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def count_sidebar_article_cards(page) -> int:
