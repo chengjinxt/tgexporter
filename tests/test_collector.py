@@ -374,6 +374,12 @@ def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_p
     assert all(path.parent == tmp_path / "发布内容" / "4K影视屋" / "20260801" for path in paths)
     assert all('route: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
     assert all('account: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
+    first_text = paths[0].read_text(encoding="utf-8")
+    assert 'title: "侵略机器(2026)：未来世界动作科幻片"' in first_text
+    assert "# 侵略机器(2026)：未来世界动作科幻片" in first_text
+    assert "名称：" not in first_text
+    assert "描述：" not in first_text
+    assert "影片看点" in first_text
 
 
 def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Path, monkeypatch):
@@ -421,6 +427,9 @@ def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Pa
     text = paths[0].read_text(encoding="utf-8")
 
     assert "影片资料" in text
+    assert 'title: "侵略机器(2026)：原始资源简介"' in text
+    assert "名称：" not in text
+    assert "描述：" not in text
     assert "片名：War Machine" in text
     assert "上映时间：2026-03-06" in text
     assert "主演：Alan Ritchson、Dennis Quaid" in text

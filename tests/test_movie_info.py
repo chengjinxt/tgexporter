@@ -1,4 +1,6 @@
 from tgexporter.movie_info import (
+    build_movie_article_text,
+    build_movie_publish_title,
     clean_search_url,
     extract_movie_source_urls,
     fetch_page_metadata_from_html,
@@ -13,6 +15,46 @@ def test_parse_movie_title_removes_resource_tags():
 
     assert title.name == "侵略机器"
     assert title.year == "2026"
+
+
+def test_build_movie_publish_title_removes_name_prefix_and_adds_hook():
+    title = build_movie_publish_title(
+        "名称：侵略机器(2026)【4K.SDR&DV双版本】【高码率】【内封简繁英】【科幻、动作】",
+        "描述：在美国陆军游骑兵选拔的最后阶段，一支精英团队的训练演习变成了与一种难以想象的威胁之间的生存之战。",
+    )
+
+    assert title.startswith("侵略机器(2026)：")
+    assert "名称：" not in title
+    assert "4K" not in title
+    assert "精英部队" in title
+
+
+def test_build_movie_publish_title_uses_genres_when_description_is_too_long():
+    title = build_movie_publish_title(
+        "名称：泰迪熊 剧版(两季合集)【WEB-DL.1080p】【内封简繁英】【剧情、喜剧】",
+        "描述：泰迪熊声名大噪的时期已经过去，现在他和好基友、16岁的约翰·贝内特住在一起，后者来自波士顿的工薪家庭，和父母以及堂姐住一起。",
+    )
+
+    assert title == "泰迪熊 剧版(两季合集)：剧情/喜剧新片资源整理"
+
+
+def test_build_movie_article_text_rewrites_description_label():
+    text = build_movie_article_text(
+        "名称：侵略机器(2026)【4K.SDR&DV双版本】\n\n"
+        "描述：在美国陆军游骑兵选拔的最后阶段，一支精英团队的训练演习变成了与一种难以想象的威胁之间的生存之战。\n\n"
+        "夸克：https://pan.quark.cn/s/example\n"
+        "百度：https://pan.baidu.com/s/example?pwd=Yu66\n\n"
+        "资源搜索机器人bot👉:点击搜索",
+        "侵略机器(2026)：精英部队训练突变生存战",
+    )
+
+    assert "影片看点" in text
+    assert "资源信息" in text
+    assert "描述：" not in text
+    assert "名称：" not in text
+    assert "资源搜索机器人" not in text
+    assert "训练演习变成了与一种难以想象的威胁之间的生存之战" not in text
+    assert "夸克网盘：https://pan.quark.cn/s/example" in text
 
 
 def test_movie_context_search_queries_use_description_line():

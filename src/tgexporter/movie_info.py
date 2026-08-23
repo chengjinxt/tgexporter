@@ -24,6 +24,8 @@ MOVIE_SOURCE_DOMAINS = (
 MOVIE_TITLE_PREFIX_RE = re.compile(r"^\s*名称\s*[:：]\s*")
 MOVIE_YEAR_RE = re.compile(r"[（(](?P<year>19\d{2}|20\d{2})[)）]")
 MOVIE_TAG_RE = re.compile(r"【[^】]+】")
+MOVIE_DESCRIPTION_LINE_RE = re.compile(r"^\s*(?:描述|简介|剧情)\s*[:：]\s*(?P<value>.+?)\s*$")
+MOVIE_RESOURCE_LABEL_RE = re.compile(r"^\s*(?P<label>夸克|百度|迅雷|115|阿里)\s*[:：]\s*(?P<url>https?://\S+)\s*$")
 JSON_LD_RE = re.compile(
     r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(?P<json>.*?)</script>",
     re.IGNORECASE | re.DOTALL,
@@ -55,6 +57,12 @@ class MovieInfo:
     image_urls: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class MovieResourceLink:
+    label: str
+    url: str
+
+
 def parse_movie_title(title: str) -> MovieTitle:
     value = MOVIE_TITLE_PREFIX_RE.sub("", title or "").strip()
     year_match = MOVIE_YEAR_RE.search(value)
@@ -64,6 +72,156 @@ def parse_movie_title(title: str) -> MovieTitle:
     value = re.split(r"\s{2,}|[|｜]", value, maxsplit=1)[0]
     value = re.sub(r"\s+", " ", value).strip(" ：:-")
     return MovieTitle(raw=title, name=value or title.strip(), year=year)
+
+
+def build_movie_publish_title(title: str, context_text: str | None = None, info: MovieInfo | None = None) -> str:
+    movie_title = parse_movie_title(title)
+    name = display_movie_name(movie_title, info)
+    genres = movie_genres_from_text(title)
+    if not genres and info and info.genres:
+        genres = list(info.genres[:2])
+    hook = movie_hook_from_description(extract_movie_description(context_text or ""))
+    if hook:
+        return trim_title(f"{name}：{hook}")
+    if genres:
+        return trim_title(f"{name}：{'/'.join(genres[:2])}新片资源整理")
+    return trim_title(name)
+
+
+def display_movie_name(movie_title: MovieTitle, info: MovieInfo | None = None) -> str:
+    name = movie_title.name or (info.name if info else "") or movie_title.raw
+    year = movie_title.year or year_from_text(info.release_date if info else None)
+    if year and year not in name:
+        return f"{name}({year})"
+    return name
+
+
+def trim_title(value: str, limit: int = 64) -> str:
+    value = re.sub(r"\s+", " ", value).strip(" ：:-")
+    return value if len(value) <= limit else value[: limit - 1].rstrip() + "…"
+
+
+def movie_genres_from_text(text: str) -> list[str]:
+    genres: list[str] = []
+    for tag in MOVIE_TAG_RE.findall(text or ""):
+        content = tag.strip("【】")
+        for part in re.split(r"[、,/&|｜.\s]+", content):
+            part = part.strip()
+            if part in {"剧情", "喜剧", "科幻", "动作", "悬疑", "惊悚", "恐怖", "犯罪", "战争", "奇幻", "冒险", "动画", "爱情", "纪录"}:
+                if part not in genres:
+                    genres.append(part)
+    return genres
+
+
+def year_from_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.search(r"(19\d{2}|20\d{2})", value)
+    return match.group(1) if match else None
+
+
+def extract_movie_description(text: str) -> str:
+    for line in (text or "").splitlines():
+        match = MOVIE_DESCRIPTION_LINE_RE.match(line)
+        if match:
+            return clean_text(match.group("value"))
+    return ""
+
+
+def movie_hook_from_description(description: str) -> str:
+    description = clean_text(description)
+    if not description:
+        return ""
+    replacements = [
+        ("在美国陆军游骑兵选拔的最后阶段，", ""),
+        ("一支精英团队的训练演习变成了与一种难以想象的威胁之间的生存之战", "精英部队训练突变生存战"),
+        ("训练演习变成了", "训练突变为"),
+        ("难以想象的威胁", "未知威胁"),
+    ]
+    hook = description
+    for old, new in replacements:
+        hook = hook.replace(old, new)
+    hook = re.split(r"[。.!！?？]", hook, maxsplit=1)[0]
+    hook = re.sub(r"\s+", " ", hook).strip(" ，,。.")
+    if hook == description.strip(" ，,。.") and len(hook) > 18:
+        return ""
+    if len(hook) > 24:
+        hook = hook[:24].rstrip(" ，,") + "…"
+    return hook
+
+
+def build_movie_article_text(raw_text: str, title: str, info: MovieInfo | None = None) -> str:
+    description = extract_movie_description(raw_text)
+    resources = extract_movie_resource_links(raw_text)
+    movie_title = parse_movie_title(title)
+    display_name = display_movie_name(movie_title, info)
+    lines: list[str] = []
+    intro = rewrite_movie_description(description, display_name)
+    if not intro:
+        intro = rewrite_movie_description(extract_movie_body_text(raw_text, movie_title), display_name)
+    if intro:
+        lines.extend(["影片看点", "", intro])
+    elif display_name:
+        lines.extend(["影片看点", "", f"这次整理的是《{display_name}》相关资源，适合喜欢类型片的观众关注。"])
+    if resources:
+        lines.extend(["", "资源信息", ""])
+        for item in resources:
+            lines.append(f"{item.label}网盘：{item.url}")
+    return "\n".join(lines).strip()
+
+
+def extract_movie_body_text(text: str, movie_title: MovieTitle) -> str:
+    body_lines: list[str] = []
+    title_candidates = {
+        clean_text(movie_title.raw),
+        clean_text(movie_title.name),
+    }
+    for line in (text or "").splitlines():
+        value = clean_text(line)
+        if not value:
+            continue
+        if value in title_candidates:
+            continue
+        if MOVIE_TITLE_PREFIX_RE.match(value) or MOVIE_DESCRIPTION_LINE_RE.match(value):
+            continue
+        if MOVIE_RESOURCE_LABEL_RE.match(value):
+            continue
+        if value.startswith(("投稿:", "投稿：", "Channel:", "Channel：")):
+            continue
+        if "资源搜索机器人" in value or "点击搜索" in value:
+            continue
+        body_lines.append(value)
+    return "\n".join(body_lines).strip()
+
+
+def rewrite_movie_description(description: str, display_name: str) -> str:
+    description = clean_text(description)
+    if not description:
+        return ""
+    text = description
+    text = text.replace("在美国陆军游骑兵选拔的最后阶段，一支精英团队的训练演习变成了与一种难以想象的威胁之间的生存之战。", "故事从美国陆军游骑兵选拔的最后阶段展开。一次看似常规的训练演习逐渐失控，精英小队被迫面对超出预期的未知威胁，原本的考核变成了真正的生存战。")
+    if text == description:
+        text = re.sub(r"^这部影片讲述[:：]?", "", text)
+        if not text.startswith(("影片", "故事", "本片", "剧集")):
+            text = f"故事围绕{text}"
+        if not text.endswith(("。", "！", "？")):
+            text += "。"
+    if display_name and display_name not in text:
+        text = f"《{display_name}》{text}"
+    return text
+
+
+def extract_movie_resource_links(text: str) -> list[MovieResourceLink]:
+    resources: list[MovieResourceLink] = []
+    for line in (text or "").splitlines():
+        match = MOVIE_RESOURCE_LABEL_RE.match(line.strip())
+        if not match:
+            continue
+        label = match.group("label")
+        url = match.group("url").rstrip(".,;，。；")
+        if not any(item.url == url for item in resources):
+            resources.append(MovieResourceLink(label=label, url=url))
+    return resources
 
 
 def fetch_movie_info(
