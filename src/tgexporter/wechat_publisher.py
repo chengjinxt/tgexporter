@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from .filename import sanitize_title
+from .markdown_utils import is_external_markdown_target, markdown_image_line, markdown_link_line
 from .text_filters import is_channel_promo_line
 
 
@@ -268,25 +269,26 @@ def markdown_to_wechat_html(
         if is_channel_promo_line(line):
             flush_markdown_buffer()
             continue
-        image = re.match(r"!\[(?P<alt>.*?)\]\((?P<src>.*?)\)", line)
+        image = markdown_image_line(line)
         if image:
             flush_markdown_buffer()
             if not include_images:
                 continue
-            src = resolve_markdown_image_asset(base_dir, image.group("src"), embed_local_images=embed_local_images)
-            alt = html.escape(image.group("alt"))
+            alt_text, src_value = image
+            src = resolve_markdown_image_asset(base_dir, src_value, embed_local_images=embed_local_images)
+            alt = html.escape(alt_text)
             blocks.append(
                 f'<p style="{P_STYLE}"><img src="{html.escape(src)}" alt="{alt}" '
                 'style="max-width:100%;display:block;margin:0 auto 18px;"></p>'
             )
             continue
-        video = re.match(r"(?:视频：)?\[(?P<label>.*?)\]\((?P<src>.*?\.(?:mp4|mov|webm))\)", line, re.I)
-        if video:
+        video = markdown_link_line(line)
+        if video and video[0].strip() in {"", "视频："} and re.search(r"\.(?:mp4|mov|webm)$", video[2], re.I):
             flush_markdown_buffer()
-            src_value = video.group("src")
+            src_value = video[2]
             if render_local_videos or src_value.startswith(("http://", "https://")):
                 src = resolve_markdown_asset(base_dir, src_value)
-                label = html.escape(video.group("label"))
+                label = html.escape(video[1])
                 blocks.append(
                     f'<p style="{P_STYLE}">{label}</p>'
                     f'<video controls src="{html.escape(src)}" style="max-width:100%;display:block;margin:0 auto 18px;"></video>'
@@ -505,11 +507,11 @@ def local_image_paths(article: WechatArticle) -> list[Path]:
     base_dir = article.source_path.parent
     paths: list[Path] = []
     for raw_line in article.body_markdown.splitlines():
-        image = re.match(r"!\[.*?\]\((?P<src>.*?)\)", raw_line.strip())
+        image = markdown_image_line(raw_line)
         if not image:
             continue
-        src = image.group("src")
-        if src.startswith(("http://", "https://", "data:", "file://")):
+        src = image[1]
+        if is_external_markdown_target(src):
             continue
         path = (base_dir / src).resolve()
         if path.exists():
@@ -909,19 +911,19 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
             flush_markdown_buffer()
             continue
 
-        image = re.match(r"!\[(?P<alt>.*?)\]\((?P<src>.*?)\)", line)
+        image = markdown_image_line(line)
         if image:
             flush_markdown_buffer()
-            src = image.group("src")
-            if src.startswith(("http://", "https://", "data:", "file://")):
+            src = image[1]
+            if is_external_markdown_target(src):
                 continue
             path = (base_dir / src).resolve()
             if path.exists():
                 items.append(("image", path))
             continue
 
-        video = re.match(r"(?:视频：)?\[(?P<label>.*?)\]\((?P<src>.*?\.(?:mp4|mov|webm))\)", line, re.I)
-        if video:
+        video = markdown_link_line(line)
+        if video and video[0].strip() in {"", "视频："} and re.search(r"\.(?:mp4|mov|webm)$", video[2], re.I):
             flush_markdown_buffer()
             continue
 

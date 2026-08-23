@@ -9,6 +9,7 @@ from pathlib import Path
 from .collector import TelegramCollector, is_transient_telegram_error, telegram_network_hint
 from .config import Config, load_config, mask_secret, require_bot_token
 from .draft_runner import DailyDraftTarget, DraftRunOptions, create_daily_draft_runner
+from .markdown_utils import is_external_markdown_target, markdown_link_line, normalize_markdown_target
 from .markdown_renderer import MarkdownRenderer
 from .source_sites import source_rule_for_url
 from .state import StateStore
@@ -17,7 +18,6 @@ from .web_capture import open_source_login_browser
 from .web_sources import WebSourceCollector, load_web_source_group, run_web_source_loop
 from .wechat_publisher import ARTICLE_SUFFIXES, MAX_WECHAT_ARTICLES, WechatPublisher
 
-MARKDOWN_ASSET_RE = re.compile(r"!?\[[^\]]*]\((?P<target>[^)]+)\)")
 BATCH_DIR_RE = re.compile(r"^第(?P<index>\d+)批$")
 
 def main(argv: list[str] | None = None) -> int:
@@ -439,8 +439,11 @@ def move_published_batch(article_paths: list[Path], batch_dir: Path) -> list[Pat
 def collect_markdown_local_assets(article_path: Path) -> list[Path]:
     base_dir = article_path.parent
     assets: list[Path] = []
-    for match in MARKDOWN_ASSET_RE.finditer(article_path.read_text(encoding="utf-8")):
-        target = normalize_markdown_asset_target(match.group("target"))
+    for line in article_path.read_text(encoding="utf-8").splitlines():
+        link = markdown_link_line(line)
+        if not link:
+            continue
+        target = normalize_markdown_asset_target(link[2])
         if not target or is_external_asset_target(target):
             continue
         path = (base_dir / target).resolve()
@@ -450,17 +453,11 @@ def collect_markdown_local_assets(article_path: Path) -> list[Path]:
 
 
 def normalize_markdown_asset_target(target: str) -> str:
-    value = target.strip()
-    if not value:
-        return ""
-    if value.startswith("<") and ">" in value:
-        return value[1 : value.index(">")].strip()
-    return value.strip('"').strip("'")
+    return normalize_markdown_target(target)
 
 
 def is_external_asset_target(target: str) -> bool:
-    lower = target.lower()
-    return lower.startswith(("http://", "https://", "data:", "file://", "#"))
+    return is_external_markdown_target(target)
 
 
 def build_draft_targets(config: Config) -> list[DailyDraftTarget]:

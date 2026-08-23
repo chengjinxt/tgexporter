@@ -455,6 +455,32 @@ def test_move_published_batch_moves_markdown_and_referenced_local_assets(tmp_pat
     assert (tmp_path / "第1批" / "001-title.md").exists()
 
 
+def test_parenthesized_movie_image_filename_is_uploaded_and_archived(tmp_path):
+    image = tmp_path / "20260823_012_PIC_001_名称：侵略机器(2026)【4K.SDR&DV双版本】.jpg"
+    image.write_bytes(b"image")
+    article = tmp_path / "20260823_012_名称：侵略机器(2026)【4K.SDR&DV双版本】.md"
+    article.write_text(
+        f"""# 名称：侵略机器(2026)【4K.SDR&DV双版本】
+
+![Telegram图片]({image.name})
+
+正文
+""",
+        encoding="utf-8",
+    )
+
+    parsed = parse_markdown_article(article)
+    items = build_wechat_body_items(parsed)
+
+    assert items[0] == ("image", image)
+    assert collect_markdown_local_assets(article) == [image.resolve()]
+
+    moved = move_published_batch([article], tmp_path / "第1批")
+
+    assert sorted(path.name for path in moved) == sorted([article.name, image.name])
+    assert (tmp_path / "第1批" / image.name).exists()
+
+
 def test_wechat_article_count_limit():
     validate_wechat_article_count([object()] * 8)
 

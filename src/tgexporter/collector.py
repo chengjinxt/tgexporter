@@ -25,6 +25,7 @@ from .image_filter import is_suitable_article_image
 from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_metadata, is_wechat_article_url
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, LinkRef, MediaAsset
+from .movie_info import fetch_movie_info, merge_movie_info_into_text, movie_info_links
 from .placeholder_image import write_placeholder_png
 from .software_share import SoftwareShare, build_software_share
 from .source_sites import SourceSiteRule, source_rule_for_url
@@ -85,6 +86,14 @@ MOVIE_RESOURCE_LINK_MARKERS = (
     "aliyundrive.com",
     "alipan.com",
 )
+MOVIE_DOWNLOAD_LINK_DOMAINS = {
+    "pan.quark.cn",
+    "pan.baidu.com",
+    "pan.xunlei.com",
+    "115cdn.com",
+    "aliyundrive.com",
+    "alipan.com",
+}
 
 
 class TelegramCollector:
@@ -260,6 +269,13 @@ class TelegramCollector:
         else:
             title = derive_title(raw_text, message_ids[0], route=route)
             text = clean_article_text(raw_text, title, [link.name for link in links])
+            if route.name == "movie4k":
+                movie_info = fetch_movie_info(title, proxy_url=self.proxy_url, context_text=raw_text)
+                text = merge_movie_info_into_text(text, movie_info)
+                links = [
+                    link for link in links if not is_movie_download_link(link.url)
+                ]
+                links.extend(unique_links(movie_info_links(movie_info), links))
         existing_path = self._find_existing_article(date_key, title, route.output_subdir)
         if existing_path is not None:
             self.state.record_messages_processed(
@@ -745,6 +761,11 @@ def is_movie4k_resource_text(text: str) -> bool:
     marker_count = sum(1 for marker in MOVIE_RESOURCE_MARKERS if normalize_text(marker) in normalized)
     has_resource_link = any(marker in text.lower() for marker in MOVIE_RESOURCE_LINK_MARKERS)
     return has_resource_link or marker_count >= 2
+
+
+def is_movie_download_link(url: str) -> bool:
+    hostname = (urllib.parse.urlparse(url).hostname or "").removeprefix("www.").lower()
+    return hostname in MOVIE_DOWNLOAD_LINK_DOMAINS
 
 
 def collect_text(messages: list[dict[str, Any]]) -> str:

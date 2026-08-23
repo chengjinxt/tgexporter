@@ -23,6 +23,7 @@ from tgexporter.collector import (
 from tgexporter.markdown_renderer import MarkdownRenderer
 from tgexporter.link_enricher import PageMetadata
 from tgexporter.models import ArticleDraft, LinkRef, MediaAsset
+from tgexporter.movie_info import MovieInfo
 from tgexporter.software_share import GitHubRepoInfo, build_software_share, find_software_intro_title
 from tgexporter.state import StateStore
 from tgexporter.telegram_bot import TelegramBotError
@@ -251,7 +252,8 @@ BleepingComputer
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"
 
 
-def test_movie4k_forwarded_post_uses_first_line_and_movie_directory(tmp_path: Path):
+def test_movie4k_forwarded_post_uses_first_line_and_movie_directory(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(collector_module, "fetch_movie_info", lambda title, proxy_url=None, context_text=None: None)
     state = StateStore(tmp_path / "state.sqlite")
     renderer = MarkdownRenderer(tmp_path / "发布内容")
     collector = TelegramCollector(
@@ -297,7 +299,8 @@ def test_movie4k_forwarded_post_uses_first_line_and_movie_directory(tmp_path: Pa
     assert "Channel:" not in text
 
 
-def test_movie4k_route_detects_channel_line_without_forward_origin(tmp_path: Path):
+def test_movie4k_route_detects_channel_line_without_forward_origin(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(collector_module, "fetch_movie_info", lambda title, proxy_url=None, context_text=None: None)
     state = StateStore(tmp_path / "state.sqlite")
     renderer = MarkdownRenderer(tmp_path / "发布内容")
     collector = TelegramCollector(
@@ -324,7 +327,8 @@ def test_movie4k_route_detects_channel_line_without_forward_origin(tmp_path: Pat
     assert paths[0].parent == tmp_path / "发布内容" / "4K影视屋" / "20260801"
 
 
-def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_path: Path):
+def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(collector_module, "fetch_movie_info", lambda title, proxy_url=None, context_text=None: None)
     state = StateStore(tmp_path / "state.sqlite")
     renderer = MarkdownRenderer(tmp_path / "发布内容")
     collector = TelegramCollector(
@@ -370,6 +374,59 @@ def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_p
     assert all(path.parent == tmp_path / "发布内容" / "4K影视屋" / "20260801" for path in paths)
     assert all('route: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
     assert all('account: "movie4k"' in path.read_text(encoding="utf-8") for path in paths)
+
+
+def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Path, monkeypatch):
+    def fake_fetch_movie_info(title, proxy_url=None, context_text=None):
+        assert title.startswith("名称：侵略机器")
+        assert "原始资源简介" in (context_text or "")
+        return MovieInfo(
+            name="War Machine",
+            source_name="IMDb",
+            source_url="https://www.imdb.com/title/tt1234567/",
+            release_date="2026-03-06",
+            genres=("动作", "科幻"),
+            cast=("Alan Ritchson", "Dennis Quaid"),
+            overview="一支精英部队在训练演习中遭遇未知威胁。",
+            image_urls=("https://example.com/poster.jpg",),
+        )
+
+    monkeypatch.setattr(collector_module, "fetch_movie_info", fake_fetch_movie_info)
+    state = StateStore(tmp_path / "state.sqlite")
+    renderer = MarkdownRenderer(tmp_path / "发布内容")
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=state,
+        renderer=renderer,
+        channel="TechnologyNewsSyncAssistant",
+    )
+    updates = [
+        {
+            "update_id": 105,
+            "channel_post": {
+                "message_id": 25,
+                "date": int(datetime(2026, 8, 1, 10, 20, tzinfo=UTC).timestamp()),
+                "chat": {"id": -1001, "username": "TechnologyNewsSyncAssistant"},
+                "caption": (
+                    "名称：侵略机器(2026)【4K.SDR&DV双版本】【高码率】【内封简繁英】【科幻、动作】\n\n"
+                    "描述：原始资源简介。\n\n"
+                    "夸克：https://pan.quark.cn/s/example"
+                ),
+                "photo": [{"file_id": "movie-resource-cover", "file_size": 20}],
+            },
+        }
+    ]
+
+    paths = collector.process_updates(updates)
+    text = paths[0].read_text(encoding="utf-8")
+
+    assert "影片资料" in text
+    assert "片名：War Machine" in text
+    assert "上映时间：2026-03-06" in text
+    assert "主演：Alan Ritchson、Dennis Quaid" in text
+    assert "https://www.imdb.com/title/tt1234567/" in text
+    assert "pan.quark.cn/s/example" in text
+    assert text.count("pan.quark.cn/s/example") == 1
 
 
 def test_movie4k_video_cover_uses_movie_brand(tmp_path: Path, monkeypatch):
