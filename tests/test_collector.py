@@ -379,7 +379,9 @@ def test_movie4k_route_detects_movie_resource_title_without_forward_source(tmp_p
     assert "# 侵略机器(2026)：未来世界动作科幻片" in first_text
     assert "名称：" not in first_text
     assert "描述：" not in first_text
-    assert "影片看点" in first_text
+    assert "影片导读" in first_text
+    assert "故事梗概" in first_text
+    assert "值得关注" in first_text
 
 
 def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Path, monkeypatch):
@@ -392,7 +394,11 @@ def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Pa
             source_url="https://www.imdb.com/title/tt1234567/",
             release_date="2026-03-06",
             genres=("动作", "科幻"),
+            directors=("Patrick Hughes",),
             cast=("Alan Ritchson", "Dennis Quaid"),
+            countries=("美国",),
+            duration="1小时45分钟",
+            rating="7.2/10",
             overview="一支精英部队在训练演习中遭遇未知威胁。",
             image_urls=("https://example.com/poster.jpg",),
         )
@@ -430,10 +436,17 @@ def test_movie4k_resource_enriches_movie_info_and_keeps_poster_link(tmp_path: Pa
     assert 'title: "侵略机器(2026)：原始资源简介"' in text
     assert "名称：" not in text
     assert "描述：" not in text
-    assert "片名：War Machine" in text
+    assert "影片导读" in text
+    assert "故事梗概" in text
+    assert "值得关注" in text
+    assert "片名：侵略机器(2026)" in text
     assert "上映时间：2026-03-06" in text
+    assert "导演：Patrick Hughes" in text
     assert "主演：Alan Ritchson、Dennis Quaid" in text
+    assert "国家/地区：美国" in text
+    assert "片长：1小时45分钟" in text
     assert "https://www.imdb.com/title/tt1234567/" in text
+    assert text.count("https://www.imdb.com/title/tt1234567/") == 1
     assert "pan.quark.cn/s/example" in text
     assert text.count("pan.quark.cn/s/example") == 1
 

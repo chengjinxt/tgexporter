@@ -190,6 +190,8 @@ def normalize_image_url(value: str, base_url: str) -> str | None:
     if not value or value.startswith("data:"):
         return None
     url = urllib.parse.urljoin(base_url, value)
+    if any(character.isspace() or ord(character) < 32 for character in url):
+        return None
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         return None

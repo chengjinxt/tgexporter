@@ -57,3 +57,9 @@ def test_find_page_image_urls_skips_ithome_placeholder_image():
     assert find_page_image_urls(html, "https://www.ithome.com/0/983/943.htm") == (
         "https://img.ithome.com/newsuploadfiles/2026/7/59545f80-d793-4c7f-ad16-fc34a3f424c2.jpg",
     )
+
+
+def test_find_page_image_urls_skips_unescaped_space_in_image_url():
+    html = '<meta property="og:image" content="https://example.com/image with spaces.jpg">'
+
+    assert find_page_image_urls(html, "https://example.com/article") == ()

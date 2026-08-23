@@ -18,6 +18,7 @@ MOVIE_SOURCE_DOMAINS = (
     "maoyan.com",
     "imdb.com",
     "rottentomatoes.com",
+    "themoviedb.org",
     "netflix.com",
     "wikipedia.org",
 )
@@ -52,7 +53,11 @@ class MovieInfo:
     original_name: str | None = None
     release_date: str | None = None
     genres: tuple[str, ...] = ()
+    directors: tuple[str, ...] = ()
     cast: tuple[str, ...] = ()
+    countries: tuple[str, ...] = ()
+    duration: str | None = None
+    rating: str | None = None
     overview: str | None = None
     image_urls: tuple[str, ...] = ()
 
@@ -155,19 +160,136 @@ def build_movie_article_text(raw_text: str, title: str, info: MovieInfo | None =
     resources = extract_movie_resource_links(raw_text)
     movie_title = parse_movie_title(title)
     display_name = display_movie_name(movie_title, info)
-    lines: list[str] = []
-    intro = rewrite_movie_description(description, display_name)
-    if not intro:
-        intro = rewrite_movie_description(extract_movie_body_text(raw_text, movie_title), display_name)
-    if intro:
-        lines.extend(["影片看点", "", intro])
-    elif display_name:
-        lines.extend(["影片看点", "", f"这次整理的是《{display_name}》相关资源，适合喜欢类型片的观众关注。"])
+    source_synopsis = description or extract_movie_body_text(raw_text, movie_title)
+    synopsis = choose_movie_synopsis(source_synopsis, info.overview if info else None)
+    lines = ["影片导读", "", build_movie_lead(display_name, raw_text, info)]
+    if synopsis:
+        lines.extend(["", "故事梗概", "", rewrite_movie_description(synopsis, display_name)])
+    highlights = build_movie_highlights(raw_text, info)
+    if highlights:
+        lines.extend(["", "值得关注", ""])
+        lines.extend(f"- {item}" for item in highlights)
+    info_section = build_movie_info_section(info, display_name=display_name)
+    if info_section:
+        lines.extend(["", info_section])
     if resources:
         lines.extend(["", "资源信息", ""])
         for item in resources:
             lines.append(f"{item.label}网盘：{item.url}")
+    if info:
+        lines.extend(["", "资料来源"])
     return "\n".join(lines).strip()
+
+
+def build_movie_lead(display_name: str, raw_text: str, info: MovieInfo | None) -> str:
+    genres = list(info.genres[:3]) if info and info.genres else movie_genres_from_text(raw_text)[:3]
+    release_date = info.release_date if info else None
+    directors = list(info.directors[:2]) if info else []
+    cast = list(info.cast[:3]) if info else []
+    details: list[str] = []
+    if release_date:
+        details.append(f"于{release_date}上线或上映")
+    if genres:
+        details.append(f"类型涵盖{'、'.join(genres)}")
+    if directors:
+        details.append(f"由{'、'.join(directors)}执导")
+    if cast:
+        details.append(f"{'、'.join(cast)}等主演")
+    if details:
+        return f"《{display_name}》{'，'.join(details)}。本文结合公开影片资料重新梳理故事背景、主创阵容与版本信息，便于观众快速判断是否符合自己的观看偏好。"
+    return f"《{display_name}》的相关片源已整理完成。下面从故事背景、类型看点和版本信息几个方面做一次完整导读。"
+
+
+def choose_movie_synopsis(source_synopsis: str, overview: str | None) -> str:
+    source = clean_text(source_synopsis)
+    professional = clean_text(overview or "")
+    if not source:
+        return professional
+    if not professional:
+        return source
+    normalized_source = normalize_movie_text(source)
+    normalized_professional = normalize_movie_text(professional)
+    if normalized_source in normalized_professional or normalized_professional in normalized_source:
+        return professional if len(professional) > len(source) else source
+    if contains_cjk(professional) and len(professional) >= len(source):
+        return professional
+    return source
+
+
+def normalize_movie_text(value: str) -> str:
+    return re.sub(r"[\W_]+", "", value or "", flags=re.UNICODE).lower()
+
+
+def contains_cjk(value: str) -> bool:
+    return bool(re.search(r"[\u3400-\u9fff]", value or ""))
+
+
+def build_movie_highlights(raw_text: str, info: MovieInfo | None) -> list[str]:
+    genres = list(info.genres[:3]) if info and info.genres else movie_genres_from_text(raw_text)[:3]
+    highlights: list[str] = []
+    genre_focus = genre_focus_text(genres)
+    if genre_focus:
+        highlights.append(f"类型看点：{genre_focus}。")
+    if info and info.directors:
+        highlights.append(f"主创阵容：由{'、'.join(info.directors[:2])}执导，{'、'.join(info.cast[:4]) + '等' if info.cast else '主创团队'}共同完成。")
+    elif info and info.cast:
+        highlights.append(f"演员阵容：{'、'.join(info.cast[:5])}等主演，人物关系与角色表现是观看时值得留意的部分。")
+    specs = extract_movie_specs(raw_text)
+    if specs:
+        highlights.append(f"版本信息：当前整理版本包含{'、'.join(specs[:6])}，可按播放设备与字幕需求选择。")
+    if info and info.rating:
+        highlights.append(f"资料评分：公开资料页当前标注为 {info.rating}，评分可能随新增评价变化。")
+    return highlights
+
+
+def genre_focus_text(genres: list[str]) -> str:
+    focus_by_genre = {
+        "动作": "动作场面、人物在高压环境下的选择与节奏推进",
+        "科幻": "科技设定、未知力量与现实秩序之间的碰撞",
+        "悬疑": "信息差、线索铺陈和真相逐步揭开的过程",
+        "惊悚": "持续升级的危机感与人物心理压力",
+        "恐怖": "环境压迫、未知威胁和生存处境",
+        "犯罪": "案件推进、人物动机与道德边界",
+        "战争": "冲突规模、团队协作与战争中的个人命运",
+        "剧情": "人物关系、角色选择及其带来的现实余波",
+        "喜剧": "角色互动、生活冲突与轻松节奏",
+        "爱情": "情感关系的建立、变化与人物成长",
+        "冒险": "未知环境、任务推进与团队协作",
+        "奇幻": "世界观设定、超自然规则与人物成长",
+        "动画": "视觉表达、世界构建与角色成长",
+        "纪录": "真实素材、事件脉络与议题观察",
+    }
+    focuses: list[str] = []
+    for genre in genres:
+        focus = focus_by_genre.get(genre)
+        if focus and focus not in focuses:
+            focuses.append(focus)
+    return "；".join(focuses[:2])
+
+
+def extract_movie_specs(text: str) -> list[str]:
+    specs: list[str] = []
+    patterns = (
+        r"4K(?:\.SDR|\.HDR)?",
+        r"DV(?:双版本)?",
+        r"HDR",
+        r"杜比视界",
+        r"1080p",
+        r"REMUX",
+        r"WEB-DL",
+        r"蓝光原盘",
+        r"高码率",
+        r"内封[^【】\n]{1,12}字幕",
+        r"简繁英(?:双语)?字幕",
+        r"\d+集全",
+        r"(?:两|三|四|五|六|七|八|九|十)季合集",
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, text or "", flags=re.IGNORECASE):
+            value = clean_text(match)
+            if value and not any(value.lower() == item.lower() or value.lower() in item.lower() for item in specs):
+                specs.append(value)
+    return specs
 
 
 def extract_movie_body_text(text: str, movie_title: MovieTitle) -> str:
@@ -231,11 +353,132 @@ def fetch_movie_info(
     context_text: str | None = None,
 ) -> MovieInfo | None:
     movie_title = parse_movie_title(title)
-    for url in movie_source_candidates(movie_title, proxy_url=proxy_url, limit=limit, context_text=context_text):
+    best_info = fetch_imdb_suggestion_info(movie_title, proxy_url=proxy_url)
+    best_score = movie_info_quality(best_info) if best_info else -1
+    candidates = movie_source_candidates(movie_title, proxy_url=proxy_url, limit=limit, context_text=context_text)
+    if best_info and best_info.source_url not in candidates:
+        candidates.insert(0, best_info.source_url)
+    for url in candidates:
         info = fetch_movie_page_info(url, movie_title, proxy_url=proxy_url)
-        if info:
-            return info
-    return None
+        if not info or not movie_info_is_usable(info) or not movie_info_matches_expected(info, movie_title):
+            continue
+        info = merge_movie_infos(info, best_info)
+        score = movie_info_quality(info)
+        if score > best_score:
+            best_info = info
+            best_score = score
+        if score >= 7:
+            break
+    return best_info
+
+
+def merge_movie_infos(primary: MovieInfo, fallback: MovieInfo | None) -> MovieInfo:
+    if not fallback:
+        return primary
+    return MovieInfo(
+        name=primary.name or fallback.name,
+        source_name=primary.source_name,
+        source_url=primary.source_url,
+        original_name=primary.original_name or fallback.original_name,
+        release_date=primary.release_date or fallback.release_date,
+        genres=primary.genres or fallback.genres,
+        directors=primary.directors or fallback.directors,
+        cast=primary.cast or fallback.cast,
+        countries=primary.countries or fallback.countries,
+        duration=primary.duration or fallback.duration,
+        rating=primary.rating or fallback.rating,
+        overview=primary.overview or fallback.overview,
+        image_urls=tuple(dict.fromkeys([*primary.image_urls, *fallback.image_urls])),
+    )
+
+
+def fetch_imdb_suggestion_info(
+    movie_title: MovieTitle,
+    proxy_url: str | None = None,
+    timeout: int = 10,
+) -> MovieInfo | None:
+    query = urllib.parse.quote(movie_title.name)
+    url = f"https://v3.sg.media-imdb.com/suggestion/x/{query}.json"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+        },
+    )
+    try:
+        with build_opener(proxy_url).open(request, timeout=timeout) as response:
+            payload = json.loads(response.read(256_000).decode("utf-8", errors="ignore"))
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError):
+        return None
+    return movie_info_from_imdb_suggestions(payload, movie_title)
+
+
+def movie_info_from_imdb_suggestions(payload, expected: MovieTitle) -> MovieInfo | None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("d"), list):
+        return None
+    candidates = [item for item in payload["d"] if isinstance(item, dict) and str(item.get("id", "")).startswith("tt")]
+    if not candidates:
+        return None
+    if expected.year:
+        year_matches = [item for item in candidates if str(item.get("y") or "") == expected.year]
+        if year_matches:
+            candidates = year_matches
+    item = candidates[0]
+    imdb_id = str(item.get("id"))
+    name = clean_text(str(item.get("l") or expected.name))
+    cast = tuple(clean_text(part) for part in str(item.get("s") or "").split(",") if clean_text(part))
+    image = item.get("i") if isinstance(item.get("i"), dict) else {}
+    image_url = clean_optional(image.get("imageUrl"))
+    year = clean_optional(item.get("y")) or expected.year
+    return MovieInfo(
+        name=name,
+        source_name="IMDb",
+        source_url=f"https://www.imdb.com/title/{imdb_id}/",
+        original_name=name if name != expected.name else None,
+        release_date=year,
+        cast=cast[:8],
+        image_urls=(image_url,) if image_url else (),
+    )
+
+
+def movie_info_is_usable(info: MovieInfo) -> bool:
+    generic_names = {
+        "豆瓣",
+        "豆瓣电影",
+        "imdb",
+        "rottentomatoes",
+        "rottentomatoesmovie",
+        "tmioe",
+        "tmdb",
+        "猫眼电影",
+        "netflix",
+    }
+    name = normalize_movie_text(info.name)
+    return bool(name and name not in generic_names)
+
+
+def movie_info_matches_expected(info: MovieInfo, expected: MovieTitle) -> bool:
+    expected_name = normalize_movie_text(expected.name)
+    names = [normalize_movie_text(info.name), normalize_movie_text(info.original_name or "")]
+    if expected_name and any(expected_name in name or name in expected_name for name in names if name):
+        return True
+    return bool(expected.year and year_from_text(info.release_date) == expected.year)
+
+
+def movie_info_quality(info: MovieInfo) -> int:
+    score = 0
+    score += 3 if info.overview else 0
+    score += 2 if info.cast else 0
+    score += 1 if info.directors else 0
+    score += 1 if info.release_date else 0
+    score += 1 if info.genres else 0
+    score += 1 if info.countries else 0
+    score += 1 if info.duration else 0
+    score += 1 if info.rating else 0
+    score += 1 if info.image_urls else 0
+    return score
 
 
 def movie_source_candidates(
@@ -244,7 +487,9 @@ def movie_source_candidates(
     limit: int = 6,
     context_text: str | None = None,
 ) -> list[str]:
-    candidates: list[str] = []
+    candidates = search_tmdb_source_urls(movie_title, proxy_url=proxy_url)
+    if candidates:
+        return candidates[:limit]
     queries = [
         f"{movie_title.name} {movie_title.year or ''} 电影 site:tmioe.com/movie",
         f"{movie_title.name} {movie_title.year or ''} 电影 site:douban.com/movie",
@@ -255,6 +500,7 @@ def movie_source_candidates(
     queries.extend(movie_context_search_queries(context_text))
     for query in queries:
         urls = [
+            *search_duckduckgo_movie_source_urls(query, proxy_url=proxy_url),
             *search_movie_source_urls(query, proxy_url=proxy_url),
             *search_google_movie_source_urls(query, proxy_url=proxy_url),
         ]
@@ -264,6 +510,39 @@ def movie_source_candidates(
             if len(candidates) >= limit:
                 return candidates
     return candidates
+
+
+def search_tmdb_source_urls(
+    movie_title: MovieTitle,
+    proxy_url: str | None = None,
+    timeout: int = 10,
+) -> list[str]:
+    search_url = "https://www.themoviedb.org/search?" + urllib.parse.urlencode(
+        {"query": movie_title.name, "language": "zh-CN"}
+    )
+    request = urllib.request.Request(
+        search_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+        },
+    )
+    try:
+        with build_opener(proxy_url).open(request, timeout=timeout) as response:
+            text = response.read(512_000).decode(response.headers.get_content_charset() or "utf-8", errors="ignore")
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return []
+    return extract_tmdb_search_urls(text)
+
+
+def extract_tmdb_search_urls(text: str) -> list[str]:
+    urls: list[str] = []
+    for match in re.finditer(r'href=["\'](?P<path>/(?:movie|tv)/\d+[^"\']*)["\']', text or "", re.IGNORECASE):
+        url = urllib.parse.urljoin("https://www.themoviedb.org", html.unescape(match.group("path")))
+        if url not in urls:
+            urls.append(url)
+    return urls[:6]
 
 
 def movie_context_search_queries(text: str | None) -> list[str]:
@@ -347,9 +626,28 @@ def search_google_movie_source_urls(query: str, proxy_url: str | None = None, ti
     return extract_movie_source_urls(text)
 
 
+def search_duckduckgo_movie_source_urls(query: str, proxy_url: str | None = None, timeout: int = 10) -> list[str]:
+    search_url = "https://html.duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+    request = urllib.request.Request(
+        search_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+        },
+    )
+    try:
+        with build_opener(proxy_url).open(request, timeout=timeout) as response:
+            text = response.read(512_000).decode(response.headers.get_content_charset() or "utf-8", errors="ignore")
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return []
+    return extract_movie_source_urls(text)
+
+
 def extract_movie_source_urls(text: str) -> list[str]:
     urls: list[str] = []
-    normalized_text = html.unescape(text or "").replace("\\/", "/")
+    normalized_text = urllib.parse.unquote(html.unescape(text or "").replace("\\/", "/"))
     for raw in re.findall(r"https?://[^\s\"'<>]+", normalized_text):
         url = clean_search_url(raw)
         if not url:
@@ -364,6 +662,7 @@ def extract_movie_source_urls(text: str) -> list[str]:
 
 def clean_search_url(url: str) -> str | None:
     url = html.unescape(url).rstrip(".,;，。；)")
+    url = re.sub(r"&rut=[0-9a-f]+(?:&.*)?$", "", url, flags=re.IGNORECASE)
     parsed = urllib.parse.urlparse(url)
     if "bing.com" in (parsed.hostname or ""):
         params = urllib.parse.parse_qs(parsed.query)
@@ -425,7 +724,11 @@ def fetch_movie_page_info(url: str, expected: MovieTitle, proxy_url: str | None 
             original_name=info.original_name,
             release_date=info.release_date,
             genres=info.genres,
+            directors=info.directors,
             cast=info.cast,
+            countries=info.countries,
+            duration=info.duration,
+            rating=info.rating,
             overview=info.overview or metadata.overview,
             image_urls=image_urls,
         )
@@ -478,8 +781,12 @@ def movie_info_from_json_ld(text: str, url: str) -> MovieInfo | None:
                 source_url=url,
                 original_name=clean_optional(item.get("alternateName")),
                 release_date=clean_optional(item.get("datePublished")),
-                genres=tuple(clean_sequence(item.get("genre"))),
+                genres=tuple(localize_movie_terms(clean_sequence(item.get("genre")))),
+                directors=tuple(clean_people(item.get("director"))[:4]),
                 cast=tuple(clean_people(item.get("actor") or item.get("actors"))[:8]),
+                countries=tuple(localize_movie_terms(clean_people(item.get("countryOfOrigin"))[:4])),
+                duration=format_movie_duration(clean_optional(item.get("duration"))),
+                rating=clean_movie_rating(item.get("aggregateRating")),
                 overview=clean_optional(item.get("description")),
                 image_urls=tuple(clean_url_sequence(item.get("image"))),
             )
@@ -559,6 +866,70 @@ def clean_people(value) -> list[str]:
     return clean_sequence(value)
 
 
+def localize_movie_terms(values: list[str]) -> list[str]:
+    translations = {
+        "action": "动作",
+        "adventure": "冒险",
+        "animation": "动画",
+        "comedy": "喜剧",
+        "crime": "犯罪",
+        "documentary": "纪录",
+        "drama": "剧情",
+        "family": "家庭",
+        "fantasy": "奇幻",
+        "history": "历史",
+        "horror": "恐怖",
+        "mystery": "悬疑",
+        "romance": "爱情",
+        "sci-fi": "科幻",
+        "science fiction": "科幻",
+        "thriller": "惊悚",
+        "war": "战争",
+        "united states": "美国",
+        "usa": "美国",
+        "united kingdom": "英国",
+        "uk": "英国",
+        "south korea": "韩国",
+        "korea": "韩国",
+        "japan": "日本",
+        "china": "中国",
+        "france": "法国",
+        "germany": "德国",
+        "canada": "加拿大",
+    }
+    result: list[str] = []
+    for value in values:
+        localized = translations.get(value.strip().lower(), value)
+        if localized not in result:
+            result.append(localized)
+    return result
+
+
+def clean_movie_rating(value) -> str | None:
+    if not isinstance(value, dict):
+        return clean_optional(value)
+    rating = clean_optional(value.get("ratingValue"))
+    if not rating:
+        return None
+    best = clean_optional(value.get("bestRating"))
+    return f"{rating}/{best}" if best and "/" not in rating else rating
+
+
+def format_movie_duration(value: str | None) -> str | None:
+    if not value:
+        return None
+    match = re.fullmatch(r"PT(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?", value, re.IGNORECASE)
+    if not match:
+        return value
+    hours = int(match.group("hours") or 0)
+    minutes = int(match.group("minutes") or 0)
+    if hours and minutes:
+        return f"{hours}小时{minutes}分钟"
+    if hours:
+        return f"{hours}小时"
+    return f"{minutes}分钟" if minutes else value
+
+
 def movie_source_name(url: str) -> str:
     hostname = (urllib.parse.urlparse(url).hostname or "").removeprefix("www.").lower()
     if hostname.endswith("tmioe.com"):
@@ -571,6 +942,8 @@ def movie_source_name(url: str) -> str:
         return "IMDb"
     if hostname.endswith("rottentomatoes.com"):
         return "Rotten Tomatoes"
+    if hostname.endswith("themoviedb.org"):
+        return "TMDB"
     return hostname or "电影资料"
 
 
@@ -587,31 +960,30 @@ def movie_info_links(info: MovieInfo | None) -> list[LinkRef]:
     ]
 
 
-def build_movie_info_section(info: MovieInfo | None) -> str:
+def build_movie_info_section(
+    info: MovieInfo | None,
+    display_name: str | None = None,
+) -> str:
     if not info:
         return ""
     lines = ["影片资料"]
-    if info.name:
-        lines.extend(["", f"片名：{info.name}"])
+    resolved_name = display_name or info.name
+    if resolved_name:
+        lines.extend(["", f"片名：{resolved_name}"])
     if info.original_name and info.original_name != info.name:
         lines.append(f"原名：{info.original_name}")
     if info.release_date:
         lines.append(f"上映时间：{info.release_date}")
     if info.genres:
         lines.append(f"类型：{' / '.join(info.genres)}")
+    if info.directors:
+        lines.append(f"导演：{'、'.join(info.directors)}")
     if info.cast:
         lines.append(f"主演：{'、'.join(info.cast)}")
-    if info.overview:
-        lines.extend(["", f"剧情简介：{info.overview}"])
-    lines.extend(["", "资料来源", "", info.source_name, "", info.source_url])
+    if info.countries:
+        lines.append(f"国家/地区：{' / '.join(info.countries)}")
+    if info.duration:
+        lines.append(f"片长：{info.duration}")
+    if info.rating:
+        lines.append(f"资料评分：{info.rating}")
     return "\n".join(lines).strip()
-
-
-def merge_movie_info_into_text(text: str, info: MovieInfo | None) -> str:
-    section = build_movie_info_section(info)
-    if not section:
-        return text
-    body = text.strip()
-    if "影片资料" in body and info.source_url in body:
-        return body
-    return f"{body}\n\n{section}".strip()

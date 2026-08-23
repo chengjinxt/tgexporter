@@ -25,7 +25,7 @@ from .image_filter import is_suitable_article_image
 from .link_enricher import ExtraLink, enrich_links, extract_urls, fetch_page_metadata, is_wechat_article_url
 from .markdown_renderer import MarkdownRenderer
 from .models import ArticleDraft, LinkRef, MediaAsset
-from .movie_info import build_movie_article_text, build_movie_publish_title, fetch_movie_info, merge_movie_info_into_text, movie_info_links
+from .movie_info import build_movie_article_text, build_movie_publish_title, fetch_movie_info, movie_info_links
 from .placeholder_image import write_placeholder_png
 from .software_share import SoftwareShare, build_software_share
 from .source_sites import SourceSiteRule, source_rule_for_url
@@ -274,7 +274,6 @@ class TelegramCollector:
                 movie_info = fetch_movie_info(source_title, proxy_url=self.proxy_url, context_text=raw_text)
                 title = build_movie_publish_title(source_title, raw_text, movie_info)
                 text = build_movie_article_text(raw_text, source_title, movie_info)
-                text = merge_movie_info_into_text(text, movie_info)
                 links = [
                     link for link in links if not is_movie_download_link(link.url)
                 ]
