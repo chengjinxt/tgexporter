@@ -19,6 +19,7 @@ from tgexporter.cli import (
 from tgexporter.config import load_config
 from tgexporter.draft_runner import DailyDraftRunner, DailyDraftTarget, DraftRunOptions
 from tgexporter.wechat_publisher import (
+    assert_active_editor_is_not_title,
     build_wechat_body_items,
     clean_wechat_title,
     close_wechat_editor_blocking_overlays,
@@ -68,12 +69,15 @@ class FakeOverlayPage:
 
 
 class FakeBodyLocator:
+    def __init__(self, count: int = 1) -> None:
+        self._count = count
+
     @property
     def first(self):
         return self
 
     def count(self) -> int:
-        return 1
+        return self._count
 
     def is_visible(self, timeout: int = 0) -> bool:
         return True
@@ -83,14 +87,26 @@ class FakeBodyPage:
     def __init__(self) -> None:
         self.script = ""
         self.body = FakeBodyLocator()
+        self.missing = FakeBodyLocator(count=0)
+        self.evaluated = False
 
     def evaluate(self, script: str):
         self.script = script
+        self.evaluated = True
         return True
 
     def locator(self, selector: str):
         assert selector == '[data-codex-body-editor="1"]'
-        return self.body
+        return self.body if self.evaluated else self.missing
+
+
+class FakeActiveEditorPage:
+    def __init__(self) -> None:
+        self.script = ""
+
+    def evaluate(self, script: str):
+        self.script = script
+        return False
 
 
 def write_article(path, image_name=None):
@@ -114,6 +130,17 @@ def test_find_body_editor_survives_scrolling_and_ancestor_title_fields():
     assert "rect.bottom > 0" not in page.script
     assert "rect.top < window.innerHeight" not in page.script
     assert "const isTitle = titleLike(text)" in page.script
+    assert "item.rect.height >= 120" in page.script
+
+
+def test_active_body_text_can_contain_title_word_without_being_title_field():
+    page = FakeActiveEditorPage()
+
+    assert_active_editor_is_not_title(page)
+
+    assert "editable.innerText" not in page.script
+    assert "editable.textContent" not in page.script
+    assert "data-placeholder" in page.script
 
 
 def test_wechat_preview_converts_markdown_assets(tmp_path):

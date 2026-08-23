@@ -954,7 +954,11 @@ def focus_body_editor(page, at_start: bool = False, at_end: bool = False) -> Non
             body.click(timeout=3000)
         else:
             body.evaluate("node => node.focus()", timeout=3000)
-    assert_active_editor_is_not_title(page)
+    try:
+        assert_active_editor_is_not_title(page)
+    except RuntimeError:
+        print(f"WeChat editor diagnostics: {describe_wechat_editors(page)!r}", flush=True)
+        raise
     if at_start or at_end:
         set_body_cursor(body, to_start=at_start)
 
@@ -972,6 +976,9 @@ def wait_for_body_editor(page, timeout_ms: int = 5000):
 
 def find_body_editor(page):
     try:
+        existing = page.locator('[data-codex-body-editor="1"]').first
+        if existing.count() and locator_is_visible(existing):
+            return existing
         found = page.evaluate(
             """() => {
                     document.querySelectorAll('[data-codex-body-editor]').forEach((node) => {
@@ -1010,7 +1017,7 @@ def find_body_editor(page):
                                 node.closest('#title, .title, .js_title, [data-placeholder*="标题"], [placeholder*="标题"]');
                             return {node, rect, area: rect.width * rect.height, hasBodyMarker, isTitle};
                         })
-                        .filter((item) => !item.isTitle)
+                        .filter((item) => !item.isTitle && (item.hasBodyMarker || item.rect.height >= 120))
                         .sort((a, b) => {
                             if (a.hasBodyMarker !== b.hasBodyMarker) return a.hasBodyMarker ? -1 : 1;
                             return b.area - a.area;
@@ -1030,6 +1037,34 @@ def find_body_editor(page):
     return None
 
 
+def describe_wechat_editors(page):
+    try:
+        return page.evaluate(
+            """() => [...document.querySelectorAll('[contenteditable], .ProseMirror')].map((node) => {
+                const rect = node.getBoundingClientRect();
+                const value = (name) => node.getAttribute(name) || '';
+                return {
+                    tag: node.tagName,
+                    id: node.id || '',
+                    className: String(node.className || ''),
+                    placeholder: value('placeholder'),
+                    dataPlaceholder: value('data-placeholder'),
+                    role: value('role'),
+                    contenteditable: value('contenteditable'),
+                    marker: value('data-codex-body-editor'),
+                    text: String(node.innerText || node.textContent || '').trim().slice(0, 120),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                    top: Math.round(rect.top),
+                    active: node === document.activeElement || node.contains(document.activeElement),
+                    inTitle: Boolean(node.closest('#title, .title, .js_title, [data-placeholder*="标题"], [placeholder*="标题"]')),
+                };
+            })"""
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 def assert_active_editor_is_not_title(page) -> None:
     is_title = page.evaluate(
         """() => {
@@ -1042,8 +1077,6 @@ def assert_active_editor_is_not_title(page) -> None:
                     editable.getAttribute && editable.getAttribute('placeholder'),
                     editable.getAttribute && editable.getAttribute('data-placeholder'),
                     editable.getAttribute && editable.getAttribute('aria-label'),
-                    editable.innerText,
-                    editable.textContent,
                 ].filter(Boolean).join(' ');
                 return /标题/.test(text) || Boolean(editable.closest && editable.closest('#title, .title, .js_title, [data-placeholder*="标题"], [placeholder*="标题"]'));
             }"""
