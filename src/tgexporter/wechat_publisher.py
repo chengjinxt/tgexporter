@@ -939,10 +939,14 @@ def build_wechat_body_items(article: WechatArticle) -> list[tuple[str, str | Pat
 
 
 def focus_body_editor(page, at_start: bool = False, at_end: bool = False) -> None:
-    body = find_body_editor(page)
+    close_wechat_editor_blocking_overlays(page)
+    body = wait_for_body_editor(page)
     if body is None:
         raise RuntimeError("No visible WeChat body editor found.")
-    close_wechat_editor_blocking_overlays(page)
+    try:
+        body.scroll_into_view_if_needed(timeout=3000)
+    except Exception:
+        pass
     try:
         body.click(timeout=3000)
     except Exception:
@@ -955,6 +959,17 @@ def focus_body_editor(page, at_start: bool = False, at_end: bool = False) -> Non
         set_body_cursor(body, to_start=at_start)
 
 
+def wait_for_body_editor(page, timeout_ms: int = 5000):
+    deadline = time.monotonic() + timeout_ms / 1000
+    while True:
+        body = find_body_editor(page)
+        if body is not None:
+            return body
+        if time.monotonic() >= deadline:
+            return None
+        page.wait_for_timeout(200)
+
+
 def find_body_editor(page):
     try:
         found = page.evaluate(
@@ -962,19 +977,15 @@ def find_body_editor(page):
                     document.querySelectorAll('[data-codex-body-editor]').forEach((node) => {
                         node.removeAttribute('data-codex-body-editor');
                     });
-                    const visible = (node) => {
+                    const usable = (node) => {
                         const rect = node.getBoundingClientRect();
                         const style = window.getComputedStyle(node);
                         return rect.width > 20 &&
                             rect.height > 10 &&
-                            rect.bottom > 0 &&
-                            rect.right > 0 &&
-                            rect.top < window.innerHeight &&
-                            rect.left < window.innerWidth &&
                             style.visibility !== 'hidden' &&
                             style.display !== 'none';
                     };
-                    const attrText = (node) => [
+                    const identityText = (node) => [
                         node.id,
                         node.className,
                         node.getAttribute('placeholder'),
@@ -982,22 +993,20 @@ def find_body_editor(page):
                         node.getAttribute('aria-label'),
                         node.getAttribute('name'),
                         node.getAttribute('role'),
-                        node.innerText,
-                        node.textContent,
                     ].filter(Boolean).join(' ');
                     const titleLike = (text) => /标题|请输入作者/.test(text) && !/正文|从这里开始|写正文/.test(text);
                     const nodes = [...document.querySelectorAll('[contenteditable="true"], [contenteditable=true], [contenteditable], .ProseMirror')]
-                        .filter(visible)
+                        .filter(usable)
                         .map((node) => {
                             const rect = node.getBoundingClientRect();
-                            const text = attrText(node);
-                            const parentText = node.parentElement ? attrText(node.parentElement) : '';
+                            const text = identityText(node);
+                            const parentText = node.parentElement ? identityText(node.parentElement) : '';
                             const grandText = node.parentElement && node.parentElement.parentElement
-                                ? attrText(node.parentElement.parentElement)
+                                ? identityText(node.parentElement.parentElement)
                                 : '';
                             const context = `${text} ${parentText} ${grandText}`;
                             const hasBodyMarker = /正文|从这里开始|写正文|ueditor|ProseMirror/i.test(context);
-                            const isTitle = titleLike(context) ||
+                            const isTitle = titleLike(text) ||
                                 node.closest('#title, .title, .js_title, [data-placeholder*="标题"], [placeholder*="标题"]');
                             return {node, rect, area: rect.width * rect.height, hasBodyMarker, isTitle};
                         })
