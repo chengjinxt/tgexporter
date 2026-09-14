@@ -247,6 +247,8 @@ BleepingComputer
 🌸 在花频道 · 茶馆水群 · 投稿通道
 
 📢 频道 👥 群组 📝 投稿
+
+🌸 科技圈· 茶馆 · 投稿
 """
 
     assert clean_article_text(text, "测试标题", ["BleepingComputer"]) == "正文第一段"

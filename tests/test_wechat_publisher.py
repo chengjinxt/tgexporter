@@ -214,6 +214,35 @@ title: "字节跳动发布 Seedream 5.0 Pro，支持多语言生成与精准编�
     assert "正文内容" in html
 
 
+def test_wechat_publish_body_removes_new_channel_promo_wording(tmp_path):
+    article_path = tmp_path / "article.md"
+    article_path.write_text(
+        """# iOS 27 更新
+
+正文内容
+
+🌸 科技圈· 茶馆 · 投稿
+
+MacRumors
+
+https://www.macrumors.com/example/
+""",
+        encoding="utf-8",
+    )
+
+    article = parse_markdown_article(article_path)
+    html = markdown_to_wechat_html(article, include_title=False)
+    items = build_wechat_body_items(article)
+    rendered_items = "".join(str(value) for kind, value in items if kind == "html")
+
+    assert "科技圈" not in html
+    assert "茶馆" not in html
+    assert "投稿" not in html
+    assert "科技圈" not in rendered_items
+    assert "MacRumors" in html
+    assert "https://www.macrumors.com/example/" in html
+
+
 def test_wechat_publish_body_keeps_reference_label_even_when_label_is_in_title(tmp_path):
     image = tmp_path / "cover.jpg"
     image.write_bytes(b"img")
