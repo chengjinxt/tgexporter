@@ -19,6 +19,7 @@ from tgexporter.cli import (
 from tgexporter.config import load_config
 from tgexporter.draft_runner import DailyDraftRunner, DailyDraftTarget, DraftRunOptions
 from tgexporter.wechat_publisher import (
+    add_wechat_article_slot,
     assert_active_editor_is_not_title,
     build_wechat_body_items,
     clean_wechat_title,
@@ -26,6 +27,7 @@ from tgexporter.wechat_publisher import (
     find_body_editor,
     markdown_to_wechat_html,
     parse_markdown_article,
+    prepare_wechat_upload_image,
     validate_wechat_article_count,
 )
 
@@ -109,6 +111,23 @@ class FakeActiveEditorPage:
         return False
 
 
+class FakeMouse:
+    def __init__(self) -> None:
+        self.wheels: list[tuple[int, int]] = []
+
+    def wheel(self, x: int, y: int) -> None:
+        self.wheels.append((x, y))
+
+
+class FakeSlotPage:
+    def __init__(self) -> None:
+        self.mouse = FakeMouse()
+        self.waits: list[int] = []
+
+    def wait_for_timeout(self, ms: int) -> None:
+        self.waits.append(ms)
+
+
 def write_article(path, image_name=None):
     image_block = f"\n![cover]({image_name})\n" if image_name else ""
     path.write_text(f"# {path.stem}\n{image_block}\n正文", encoding="utf-8")
@@ -141,6 +160,55 @@ def test_active_body_text_can_contain_title_word_without_being_title_field():
     assert "editable.innerText" not in page.script
     assert "editable.textContent" not in page.script
     assert "data-placeholder" in page.script
+
+
+def test_add_article_slot_reuses_existing_blank_card(monkeypatch):
+    page = FakeSlotPage()
+    clicks: list[str] = []
+    monkeypatch.setattr("tgexporter.wechat_publisher.close_wechat_search_component_dialog", lambda page: False)
+    monkeypatch.setattr("tgexporter.wechat_publisher.activate_existing_blank_sidebar_article", lambda page: True)
+    monkeypatch.setattr(
+        "tgexporter.wechat_publisher.click_new_article_button_in_sidebar",
+        lambda page: clicks.append("new") or True,
+    )
+
+    add_wechat_article_slot(page, 7)
+
+    assert clicks == []
+
+
+def test_add_article_slot_does_not_create_duplicate_after_count_increases(monkeypatch):
+    page = FakeSlotPage()
+    new_clicks: list[str] = []
+    counts = iter([6, 6, 7])
+    monkeypatch.setattr("tgexporter.wechat_publisher.close_wechat_search_component_dialog", lambda page: False)
+    monkeypatch.setattr("tgexporter.wechat_publisher.activate_existing_blank_sidebar_article", lambda page: False)
+    monkeypatch.setattr("tgexporter.wechat_publisher.count_sidebar_article_cards", lambda page: next(counts))
+    monkeypatch.setattr(
+        "tgexporter.wechat_publisher.click_new_article_button_in_sidebar",
+        lambda page: new_clicks.append("new") or True,
+    )
+    monkeypatch.setattr("tgexporter.wechat_publisher.click_write_new_article_option", lambda page: False)
+    monkeypatch.setattr("tgexporter.wechat_publisher.activate_new_article_editor", lambda page, index, count: False)
+    monkeypatch.setattr("tgexporter.wechat_publisher.human_pause", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError, match="refusing to create a duplicate blank slot"):
+        add_wechat_article_slot(page, 7)
+
+    assert new_clicks == ["new"]
+
+
+def test_prepare_wechat_upload_image_transcodes_mislabeled_webp(tmp_path):
+    image_module = pytest.importorskip("PIL.Image")
+    source = tmp_path / "cover.jpg"
+    image_module.new("RGB", (1200, 600), "navy").save(source, format="WEBP")
+
+    prepared = prepare_wechat_upload_image(source, tmp_path / "cache")
+
+    assert prepared != source
+    with image_module.open(prepared) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1200, 600)
 
 
 def test_wechat_preview_converts_markdown_assets(tmp_path):

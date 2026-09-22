@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import html
 import mimetypes
 import random
@@ -20,6 +21,8 @@ from .text_filters import is_channel_promo_line
 WECHAT_HOME_URL = "https://mp.weixin.qq.com/"
 WECHAT_EDITOR_URL = "https://mp.weixin.qq.com/cgi-bin/appmsg"
 MAX_WECHAT_ARTICLES = 8
+WECHAT_IMAGE_MAX_BYTES = 2_000_000
+WECHAT_IMAGE_MAX_DIMENSION = 4096
 DEFAULT_HUMAN_PAUSE_MS = (900, 1800)
 MARKDOWN_LINK_RE = re.compile(r"\[(?P<label>[^\]]+)\]\((?P<url>https?://[^)\s]+)\)")
 URL_ONLY_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)
@@ -151,7 +154,12 @@ class WechatPublisher:
                     if index > 1:
                         add_wechat_article_slot(page, index)
                         save_stage_screenshot(page, self.screenshot_dir, f"wechat-{index:02d}-article-ready.png")
-                    fill_current_wechat_article(page, article, index=index)
+                    fill_current_wechat_article(
+                        page,
+                        article,
+                        index=index,
+                        upload_cache_dir=self.runtime_dir / "wechat-upload-cache",
+                    )
                 save_wechat_draft(page)
 
                 screenshot = self.screenshot_dir / "wechat-auto-filled.png"
@@ -691,12 +699,17 @@ def fill_title(page, title: str) -> None:
     click_and_type(page, page.locator("input, textarea, [contenteditable='true']").first, title)
 
 
-def fill_current_wechat_article(page, article: WechatArticle, index: int) -> None:
+def fill_current_wechat_article(
+    page,
+    article: WechatArticle,
+    index: int,
+    upload_cache_dir: Path | None = None,
+) -> None:
     title = clean_wechat_title(article.title)
     fill_title(page, title)
     human_pause(page)
     print(f"WeChat article {index} title filled.", flush=True)
-    fill_article_body_with_local_uploads(page, article)
+    fill_article_body_with_local_uploads(page, article, upload_cache_dir=upload_cache_dir)
     assert_title_not_polluted(page, title, index)
     human_pause(page, 1200, 2400)
     print(f"WeChat article {index} body filled.", flush=True)
@@ -713,6 +726,9 @@ def fill_current_wechat_article(page, article: WechatArticle, index: int) -> Non
 
 def add_wechat_article_slot(page, index: int) -> None:
     close_wechat_search_component_dialog(page)
+    if activate_existing_blank_sidebar_article(page):
+        print(f"Reusing existing blank WeChat article slot {index}.", flush=True)
+        return
     last_count = count_sidebar_article_cards(page)
     for attempt in range(1, 4):
         page.mouse.wheel(0, -2400)
@@ -739,7 +755,14 @@ def add_wechat_article_slot(page, index: int) -> None:
         else:
             print(f"WeChat new article button not found on attempt {attempt}; retrying.", flush=True)
         current_count = count_sidebar_article_cards(page)
-        if current_count > last_count and title_is_blank_or_placeholder(page):
+        if current_count > before_count or current_count > last_count:
+            if activate_existing_blank_sidebar_article(page):
+                return
+            raise RuntimeError(
+                f"WeChat sub-article slot {index} was created but could not be activated; "
+                "refusing to create a duplicate blank slot."
+            )
+        if activate_existing_blank_sidebar_article(page):
             return
         last_count = max(last_count, current_count)
         close_wechat_search_component_dialog(page)
@@ -754,9 +777,9 @@ def activate_new_article_editor(page, index: int, before_count: int) -> bool:
         if title_is_blank_or_placeholder(page):
             wait_for_editor_ready(page)
             return True
-        if reached_count and click_newest_sidebar_article_card_after_count(page, before_count):
+        if click_blank_sidebar_article_card(page):
             human_pause(page, 900, 1700)
-        elif click_blank_sidebar_article_card(page):
+        elif reached_count and click_newest_sidebar_article_card_after_count(page, before_count):
             human_pause(page, 900, 1700)
         elif click_newest_unselected_sidebar_article_card(page):
             human_pause(page, 900, 1700)
@@ -767,6 +790,17 @@ def activate_new_article_editor(page, index: int, before_count: int) -> bool:
             return True
         page.wait_for_timeout(700)
     print(f"WeChat sub-article slot {index} did not become active on this attempt.", flush=True)
+    return False
+
+
+def activate_existing_blank_sidebar_article(page) -> bool:
+    if not click_blank_sidebar_article_card(page):
+        return False
+    for _ in range(8):
+        wait_for_editor_ready(page)
+        if title_is_blank_or_placeholder(page):
+            return True
+        page.wait_for_timeout(500)
     return False
 
 
@@ -869,7 +903,11 @@ def fill_body(page, body_html: str) -> None:
     raise RuntimeError("No editable WeChat body area found.")
 
 
-def fill_article_body_with_local_uploads(page, article: WechatArticle) -> None:
+def fill_article_body_with_local_uploads(
+    page,
+    article: WechatArticle,
+    upload_cache_dir: Path | None = None,
+) -> None:
     items = build_wechat_body_items(article)
     fill_body(page, "")
     close_wechat_editor_blocking_overlays(page)
@@ -883,7 +921,10 @@ def fill_article_body_with_local_uploads(page, article: WechatArticle) -> None:
             human_pause(page, 700, 1400)
             continue
         image_path = Path(value)
-        if insert_local_body_image(page, image_path):
+        upload_path = prepare_wechat_upload_image(image_path, upload_cache_dir)
+        if upload_path != image_path:
+            print(f"Normalized WeChat image for upload: {image_path} -> {upload_path}", flush=True)
+        if insert_local_body_image(page, upload_path):
             print(f"WeChat body image uploaded: {image_path}", flush=True)
             human_pause(page, 1800, 3600)
         else:
@@ -1102,10 +1143,124 @@ def set_body_cursor(locator, to_start: bool = False) -> None:
     )
 
 
+def prepare_wechat_upload_image(image_path: Path, cache_dir: Path | None = None) -> Path:
+    try:
+        from PIL import Image, ImageOps
+
+        expected_formats = {
+            ".jpg": {"JPEG"},
+            ".jpeg": {"JPEG"},
+            ".png": {"PNG"},
+            ".gif": {"GIF"},
+            ".webp": {"WEBP"},
+        }
+        with Image.open(image_path) as source:
+            actual_format = str(source.format or "").upper()
+            width, height = source.size
+            expected = expected_formats.get(image_path.suffix.lower(), set())
+            needs_conversion = (
+                actual_format not in expected
+                or image_path.stat().st_size > WECHAT_IMAGE_MAX_BYTES
+                or max(width, height) > WECHAT_IMAGE_MAX_DIMENSION
+            )
+            if not needs_conversion:
+                return image_path
+
+            target_dir = cache_dir or image_path.parent / ".wechat-upload-cache"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            fingerprint = hashlib.sha1(
+                f"{image_path.resolve()}:{image_path.stat().st_mtime_ns}:{image_path.stat().st_size}".encode("utf-8")
+            ).hexdigest()[:12]
+            target = target_dir / f"{image_path.stem}-{fingerprint}.jpg"
+            if target.exists() and target.stat().st_size > 0:
+                return target
+
+            image = ImageOps.exif_transpose(source).convert("RGB")
+            if max(image.size) > WECHAT_IMAGE_MAX_DIMENSION:
+                image.thumbnail(
+                    (WECHAT_IMAGE_MAX_DIMENSION, WECHAT_IMAGE_MAX_DIMENSION),
+                    Image.Resampling.LANCZOS,
+                )
+            quality = 90
+            while True:
+                image.save(target, format="JPEG", quality=quality, optimize=True, progressive=True)
+                if target.stat().st_size <= WECHAT_IMAGE_MAX_BYTES or quality <= 60:
+                    break
+                quality -= 10
+            return target
+    except Exception as exc:
+        print(f"WeChat image normalization skipped for {image_path}: {exc}", flush=True)
+        return image_path
+
+
 def insert_local_body_image(page, image_path: Path) -> bool:
-    if choose_local_image_from_toolbar(page, image_path):
+    dismiss_wechat_image_upload_error(page)
+    submitted = choose_local_image_from_toolbar(page, image_path)
+    if not submitted:
+        submitted = set_visible_file_input(page, image_path)
+    if not submitted:
+        return False
+    if wechat_image_upload_error_visible(page):
+        dismiss_wechat_image_upload_error(page)
+        return False
+    return True
+
+
+def wechat_image_upload_error_visible(page) -> bool:
+    try:
+        return bool(
+            page.evaluate(
+                r"""() => [...document.querySelectorAll('body *')].some((node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    const text = (node.innerText || node.textContent || '').replace(/\s+/g, '');
+                    return rect.width > 0 && rect.height > 0 &&
+                        rect.bottom > 0 && rect.right > 0 &&
+                        rect.top < window.innerHeight && rect.left < window.innerWidth &&
+                        style.visibility !== 'hidden' && style.display !== 'none' &&
+                        /上传失败|上传文件过大|图片上传失败|文件过大/.test(text);
+                })"""
+            )
+        )
+    except Exception:
+        return False
+
+
+def dismiss_wechat_image_upload_error(page) -> bool:
+    try:
+        point = page.evaluate(
+            r"""() => {
+                const visible = (node) => {
+                    const rect = node.getBoundingClientRect();
+                    const style = window.getComputedStyle(node);
+                    return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 &&
+                        rect.top < window.innerHeight && rect.left < window.innerWidth &&
+                        style.visibility !== 'hidden' && style.display !== 'none';
+                };
+                const error = [...document.querySelectorAll('div, span')].find((node) =>
+                    visible(node) && /上传失败|上传文件过大|图片上传失败|文件过大/.test(
+                        (node.innerText || node.textContent || '').replace(/\s+/g, '')
+                    )
+                );
+                if (!error) return null;
+                const root = error.closest('[role="dialog"], .weui-desktop-dialog, .weui-desktop-dialog__wrp, .dialog_wrp, .popover') || error.parentElement;
+                const close = root && [...root.querySelectorAll('button, a, i, span, div')]
+                    .find((node) => visible(node) && /^(×|x|关闭|知道了|确定)$/i.test((node.innerText || node.textContent || '').trim()));
+                if (close) {
+                    const rect = close.getBoundingClientRect();
+                    return {x: rect.left + rect.width / 2, y: rect.top + rect.height / 2};
+                }
+                const rect = root ? root.getBoundingClientRect() : error.getBoundingClientRect();
+                return {x: rect.right - 12, y: rect.top + 12};
+            }"""
+        )
+        if not point:
+            return False
+        page.mouse.click(point["x"], point["y"])
+        page.wait_for_timeout(400)
         return True
-    return set_visible_file_input(page, image_path)
+    except Exception:
+        return False
 
 
 def choose_local_image_from_toolbar(page, image_path: Path) -> bool:
@@ -1255,8 +1410,10 @@ def upload_cover(page, image_path: Path) -> bool:
         human_pause(page, 1000, 2000)
         if choose_cover_from_body(page):
             return True
+        close_cover_picker(page)
         return False
     except Exception:
+        close_cover_picker(page)
         return False
 
 
@@ -1266,7 +1423,13 @@ def choose_cover_from_body(page) -> bool:
         return False
     option.click(timeout=3000)
     human_pause(page, 1600, 2800)
-    if not click_cover_thumbnail(page):
+    thumbnail_clicked = False
+    for _ in range(8):
+        if click_cover_thumbnail(page):
+            thumbnail_clicked = True
+            break
+        page.wait_for_timeout(500)
+    if not thumbnail_clicked:
         return False
     human_pause(page, 800, 1600)
     print("WeChat cover thumbnail selected.", flush=True)
@@ -1277,6 +1440,21 @@ def choose_cover_from_body(page) -> bool:
     confirm_cover_dialog(page)
     human_pause(page, 1800, 3200)
     return not cover_picker_visible(page)
+
+
+def close_cover_picker(page) -> bool:
+    if not cover_picker_visible(page):
+        return False
+    for text in ["取消", "关闭"]:
+        if click_visible_button(page, text) or click_visible_text(page, text):
+            human_pause(page, 500, 1000)
+            return True
+    try:
+        page.keyboard.press("Escape")
+        human_pause(page, 500, 1000)
+        return not cover_picker_visible(page)
+    except Exception:
+        return False
 
 
 def choose_cover_local_upload(page, image_path: Path) -> bool:
