@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
+from .network import AdaptiveOpener, is_definite_connection_failure
+
 
 class TelegramBotError(RuntimeError):
     pass
@@ -39,12 +41,16 @@ class TelegramBotClient:
         self.token = token
         self.api_base = f"https://api.telegram.org/bot{token}"
         self.file_base = f"https://api.telegram.org/file/bot{token}"
-        self.opener = urllib.request.build_opener(
-            urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}) if proxy_url else urllib.request.ProxyHandler()
-        )
+        self.opener = AdaptiveOpener(proxy_url)
+
+    @property
+    def connection_mode(self) -> str:
+        if isinstance(self.opener, AdaptiveOpener):
+            return self.opener.connection_mode
+        return "custom"
 
     def get_me(self) -> dict[str, Any]:
-        return self._request_json("getMe")
+        return self._request_json("getMe", timeout=10)
 
     def get_updates(
         self,
@@ -52,6 +58,7 @@ class TelegramBotClient:
         timeout: int = 30,
         allowed_updates: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        self._ensure_connection_route()
         params: dict[str, Any] = {"timeout": timeout}
         if offset is not None:
             params["offset"] = offset
@@ -174,15 +181,24 @@ class TelegramBotClient:
         raise TelegramBotError(f"Failed to download Telegram file to {destination}: {last_error}") from last_error
 
     def _request_json(self, method: str, params: dict[str, Any] | None = None, timeout: int = 90) -> Any:
+        if method not in {"getMe", "getUpdates", "getFile"}:
+            self._ensure_connection_route()
         body = urllib.parse.urlencode(params or {}).encode("utf-8")
         request = urllib.request.Request(
             f"{self.api_base}/{method}",
             data=body if params is not None else None,
             headers={"User-Agent": "tgexporter/0.1"},
         )
+
+        def perform(opener):
+            with opener.open(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+
         try:
-            with self.opener.open(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self._execute_request(
+                perform,
+                allow_ambiguous_retry=method in {"getMe", "getUpdates", "getFile"},
+            )
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise TelegramBotError(f"Telegram API {method} failed: {detail}") from exc
@@ -194,6 +210,25 @@ class TelegramBotClient:
             raise TelegramBotError(f"Telegram API {method} failed: {description}")
         return payload.get("result")
 
+    def _ensure_connection_route(self) -> None:
+        if not isinstance(self.opener, AdaptiveOpener):
+            return
+        if self.opener.verified or self.opener.route_count <= 1:
+            return
+        self.get_me()
+
+    def _execute_request(self, operation, *, allow_ambiguous_retry: bool):
+        if not isinstance(self.opener, AdaptiveOpener):
+            return operation(self.opener)
+        return self.opener.execute(
+            operation,
+            retry_decider=(
+                (lambda _exc: True)
+                if allow_ambiguous_retry
+                else is_definite_connection_failure
+            ),
+        )
+
     def _request_multipart(
         self,
         method: str,
@@ -203,6 +238,7 @@ class TelegramBotClient:
         path: Path,
         timeout: int = 180,
     ) -> Any:
+        self._ensure_connection_route()
         path = Path(path)
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -230,9 +266,13 @@ class TelegramBotClient:
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
             },
         )
+
+        def perform(opener):
+            with opener.open(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+
         try:
-            with self.opener.open(request, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+            payload = self._execute_request(perform, allow_ambiguous_retry=False)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             raise TelegramBotError(f"Telegram API {method} failed: {detail}") from exc

@@ -1323,7 +1323,7 @@ def poll_timeout_after_transient_error(timeout: int, consecutive_errors: int) ->
 
 def telegram_network_hint(exc: TelegramBotError, proxy_url: str | None = None) -> str:
     text = str(exc).lower()
-    proxy = proxy_url or "direct"
+    proxy = proxy_url or "none"
     if any(marker in text for marker in ("ssl", "handshake", "unexpected_eof", "eof occurred", "read operation timed out")):
         reason = "Telegram Bot API 的 HTTPS 连接被代理或网络中途断开"
     elif any(marker in text for marker in ("connection refused", "connection reset", "connection aborted")):
@@ -1333,10 +1333,10 @@ def telegram_network_hint(exc: TelegramBotError, proxy_url: str | None = None) -
     else:
         reason = "Telegram Bot API 网络请求失败"
     return (
-        f"排查提示：{reason}；当前代理为 {proxy}。请确认代理软件正在运行，"
-        "HTTP 代理端口可用，规则/全局模式允许 api.telegram.org。"
+        f"排查提示：{reason}；配置代理为 {proxy}。程序会优先直连，直连不可用时自动尝试配置代理和系统代理。"
+        "请确认至少一种网络路径允许访问 api.telegram.org；若使用代理，再确认代理端口和规则可用。"
         "可运行 `tgexporter doctor` 做短连接检测；如果短连接正常但 listen 仍反复报错，"
-        "程序会自动改用 5 秒短轮询重试，通常是代理长连接不稳定。"
+        "程序会自动改用 5 秒短轮询重试，通常是当前网络路径的长连接不稳定。"
     )
 
 

@@ -8,6 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 
 from .models import LinkRef
+from .network import AdaptiveOpener
 
 URL_RE = re.compile(r"https?://[^\s<>()\"'，。；、！？]+", re.IGNORECASE)
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
@@ -133,10 +134,8 @@ def is_wechat_article_url(url: str) -> bool:
     return hostname.lower() in WECHAT_ARTICLE_DOMAINS
 
 
-def build_opener(proxy_url: str | None = None) -> urllib.request.OpenerDirector:
-    if proxy_url:
-        return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}))
-    return urllib.request.build_opener()
+def build_opener(proxy_url: str | None = None) -> AdaptiveOpener:
+    return AdaptiveOpener(proxy_url)
 
 
 def _find_title(html_text: str) -> str | None:
