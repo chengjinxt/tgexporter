@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import sys
@@ -115,6 +116,38 @@ def build_parser() -> argparse.ArgumentParser:
     collect_web.add_argument("--save-dir", type=Path, default=None, help="Base directory for rendered Markdown and media.")
     collect_web.set_defaults(func=cmd_collect_web)
 
+    tech_digest = subparsers.add_parser(
+        "tech-digest",
+        help="Collect and optionally publish the daily bilingual technology digest.",
+    )
+    schedule_mode = tech_digest.add_mutually_exclusive_group()
+    schedule_mode.add_argument("--once", action="store_true", help="Run one collection immediately and exit.")
+    schedule_mode.add_argument("--watch", action="store_true", help="Run every day at the configured time.")
+    publish_mode = tech_digest.add_mutually_exclusive_group()
+    publish_mode.add_argument("--publish", action="store_true", help="Publish rendered articles to Telegram.")
+    publish_mode.add_argument("--dry-run", action="store_true", help="Render locally without sending to Telegram.")
+    tech_digest.add_argument("--at", default=None, help="Daily time in HH:MM format; defaults to [tech_digest].schedule_at.")
+    tech_digest.add_argument("--channel", default=None, help="Telegram target channel override.")
+    tech_digest.set_defaults(func=cmd_tech_digest)
+
+    tech_digest_clear = subparsers.add_parser(
+        "tech-digest-clear-published",
+        help="Back up the tech digest database and clear published state for one date.",
+    )
+    tech_digest_clear.add_argument("--date", required=True, help="Date to clear in YYYY-MM-DD format.")
+    tech_digest_clear.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Confirm deletion after a consistent SQLite backup is created.",
+    )
+    tech_digest_clear.set_defaults(func=cmd_tech_digest_clear_published)
+
+    translation_check = subparsers.add_parser(
+        "translation-check",
+        help="Verify the bundled offline English/Chinese translation runtime and models.",
+    )
+    translation_check.set_defaults(func=cmd_translation_check)
+
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
     add_channel_argument(listen)
     listen.add_argument("--once", action="store_true", help="Poll once and exit.")
@@ -160,6 +193,36 @@ def build_parser() -> argparse.ArgumentParser:
 
 def add_channel_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--channel", default=None, help="Telegram channel username. Overrides [telegram].channel for this run.")
+
+
+def cmd_tech_digest(args) -> int:
+    from .tech_digest import run_tech_digest_command
+
+    return run_tech_digest_command(args)
+
+
+def cmd_tech_digest_clear_published(args) -> int:
+    from .tech_digest import run_tech_digest_clear_published_command
+
+    return run_tech_digest_clear_published_command(args)
+
+
+def cmd_translation_check(args) -> int:
+    from .tech_digest_translation import LibreTranslateTranslator
+
+    config = load_config(args.root)
+    translator = LibreTranslateTranslator(model_dir=config.tech_digest.translation.model_dir)
+    translator.validate()
+    result = {
+        "provider": "libretranslate",
+        "model_dir": str(config.tech_digest.translation.model_dir),
+        "en_to_zh": translator.translate_text(
+            "The new processor improves performance while using less power.", "en", "zh"
+        ),
+        "zh_to_en": translator.translate_text("新款处理器提升性能并降低功耗。", "zh", "en"),
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
 
 
 def default_root() -> Path:

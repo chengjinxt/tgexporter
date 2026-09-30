@@ -4,7 +4,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 import sys
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs, collect_submodules
 
 ROOT = Path.cwd()
 BROWSER_ROOT = Path.home() / "AppData" / "Local" / "ms-playwright"
@@ -32,6 +32,11 @@ try:
     hiddenimports += playwright_hiddenimports
 except Exception:
     hiddenimports += ["playwright.sync_api"]
+
+try:
+    binaries += collect_dynamic_libs("ctranslate2")
+finally:
+    hiddenimports += ["ctranslate2", "sentencepiece"]
 
 if BROWSER_ROOT.exists():
     for browser_path in sorted(BROWSER_ROOT.iterdir()):

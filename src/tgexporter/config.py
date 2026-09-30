@@ -45,6 +45,28 @@ class WebSourcesConfig:
 
 
 @dataclass(frozen=True)
+class TechDigestTranslationConfig:
+    provider: str = "libretranslate"
+    model_dir: Path = Path("runtime/translation-models")
+    endpoint: str = "https://api.openai.com/v1/chat/completions"
+    model: str = ""
+    api_key_env: str = "OPENAI_API_KEY"
+    timeout_seconds: int = 90
+
+
+@dataclass(frozen=True)
+class TechDigestConfig:
+    output_dir: Path
+    target_channel: str = ""
+    schedule_at: str = "20:00"
+    timezone: str = "Asia/Shanghai"
+    articles_per_core: int = 2
+    daily_limit: int = 16
+    candidates_per_source: int = 12
+    translation: TechDigestTranslationConfig = TechDigestTranslationConfig()
+
+
+@dataclass(frozen=True)
 class ContentRouteConfig:
     name: str
     output_subdir: str = ""
@@ -64,6 +86,7 @@ class Config:
     routes: dict[str, ContentRouteConfig]
     source: SourceConfig
     web_sources: WebSourcesConfig
+    tech_digest: TechDigestConfig
 
 
 def default_wechat_accounts(root: Path, default_profile_dir: Path) -> dict[str, WechatAccountConfig]:
@@ -97,6 +120,8 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
     wechat = data.get("wechat", {})
     source = data.get("source", {})
     web_sources = data.get("web_sources", {})
+    tech_digest = data.get("tech_digest", {})
+    tech_digest_translation = tech_digest.get("translation", {})
     wechat_accounts_data = data.get("wechat_accounts", {})
     routes_data = data.get("routes", {})
 
@@ -137,6 +162,30 @@ def load_config(root: Path | None = None, config_path: Path | None = None) -> Co
             default_group=web_source_group,
             interval_seconds=web_source_interval,
             max_articles_per_run=web_source_limit,
+        ),
+        tech_digest=TechDigestConfig(
+            output_dir=_resolve(root, tech_digest.get("output_dir", "发布内容/科技日报")),
+            target_channel=str(tech_digest.get("target_channel", "")).strip(),
+            schedule_at=str(tech_digest.get("schedule_at", "20:00")).strip(),
+            timezone=str(tech_digest.get("timezone", timezone)).strip() or timezone,
+            articles_per_core=max(1, int(tech_digest.get("articles_per_core", 2))),
+            daily_limit=max(1, int(tech_digest.get("daily_limit", 16))),
+            candidates_per_source=max(2, int(tech_digest.get("candidates_per_source", 12))),
+            translation=TechDigestTranslationConfig(
+                provider=str(tech_digest_translation.get("provider", "libretranslate")).strip().lower()
+                or "libretranslate",
+                model_dir=_resolve(
+                    root,
+                    tech_digest_translation.get("model_dir", "runtime/translation-models"),
+                ),
+                endpoint=str(
+                    tech_digest_translation.get("endpoint", "https://api.openai.com/v1/chat/completions")
+                ).strip(),
+                model=str(tech_digest_translation.get("model", "")).strip(),
+                api_key_env=str(tech_digest_translation.get("api_key_env", "OPENAI_API_KEY")).strip()
+                or "OPENAI_API_KEY",
+                timeout_seconds=max(1, int(tech_digest_translation.get("timeout_seconds", 90))),
+            ),
         ),
     )
 

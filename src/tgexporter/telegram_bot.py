@@ -1,17 +1,35 @@
 from __future__ import annotations
 
+import html
 import json
+import mimetypes
+import re
 import shutil
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+from uuid import uuid4
 
 
 class TelegramBotError(RuntimeError):
     pass
+
+
+def normalize_chat_id(chat_id: str | int) -> str:
+    value = str(chat_id).strip()
+    if not value:
+        raise ValueError("Telegram chat ID is required.")
+    if value.startswith("@") or value.lstrip("-").isdigit():
+        return value
+    return f"@{value}"
+
+
+def telegram_text_length(text: str) -> int:
+    visible_text = re.sub(r"<[^>]+>", "", text)
+    return len(html.unescape(visible_text))
 
 
 class TelegramBotClient:
@@ -48,6 +66,96 @@ class TelegramBotClient:
     def get_file(self, file_id: str) -> dict[str, Any]:
         return self._request_json("getFile", {"file_id": file_id})
 
+    def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        parse_mode: str = "HTML",
+        disable_web_page_preview: bool = False,
+    ) -> dict[str, Any]:
+        if telegram_text_length(text) > 4096:
+            raise ValueError("Telegram text messages cannot exceed 4096 characters.")
+        result = self._request_json(
+            "sendMessage",
+            {
+                "chat_id": normalize_chat_id(chat_id),
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": str(disable_web_page_preview).lower(),
+            },
+        )
+        if not isinstance(result, dict):
+            raise TelegramBotError("Unexpected sendMessage response.")
+        return result
+
+    def send_article(self, chat_id: str, text: str, media: Iterable[Any]) -> dict[str, Any]:
+        assets = list(media)
+        image = next((asset for asset in assets if asset.kind == "image" and asset.path.exists()), None)
+        video = next((asset for asset in assets if asset.kind == "video" and asset.path.exists()), None)
+        media_errors: list[str] = []
+
+        if video is not None:
+            try:
+                if telegram_text_length(text) <= 1024:
+                    result = self.send_video(chat_id, video.path, caption=text)
+                else:
+                    self.send_video(chat_id, video.path)
+                    result = self.send_message(chat_id, text)
+                result = dict(result)
+                result["media_errors"] = media_errors
+                return result
+            except TelegramBotError as exc:
+                media_errors.append(str(exc))
+
+        if image is not None and telegram_text_length(text) <= 1024:
+            result = self.send_photo(chat_id, image.path, caption=text)
+        elif image is not None:
+            self.send_photo(chat_id, image.path)
+            result = self.send_message(chat_id, text)
+        else:
+            result = self.send_message(chat_id, text)
+
+        result = dict(result)
+        result["media_errors"] = media_errors
+        return result
+
+    def send_photo(self, chat_id: str, path: Path, caption: str = "") -> dict[str, Any]:
+        if telegram_text_length(caption) > 1024:
+            raise ValueError("Telegram photo captions cannot exceed 1024 characters.")
+        result = self._request_multipart(
+            "sendPhoto",
+            {
+                "chat_id": normalize_chat_id(chat_id),
+                "caption": caption,
+                "parse_mode": "HTML",
+                "disable_notification": "false",
+            },
+            file_field="photo",
+            path=path,
+        )
+        if not isinstance(result, dict):
+            raise TelegramBotError("Unexpected sendPhoto response.")
+        return result
+
+    def send_video(self, chat_id: str, path: Path, caption: str = "") -> dict[str, Any]:
+        if telegram_text_length(caption) > 1024:
+            raise ValueError("Telegram video captions cannot exceed 1024 characters.")
+        result = self._request_multipart(
+            "sendVideo",
+            {
+                "chat_id": normalize_chat_id(chat_id),
+                "caption": caption,
+                "parse_mode": "HTML",
+                "supports_streaming": "true",
+            },
+            file_field="video",
+            path=path,
+        )
+        if not isinstance(result, dict):
+            raise TelegramBotError("Unexpected sendVideo response.")
+        return result
+
     def download_file(self, file_path: str, destination: Path, attempts: int = 3) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
         url = f"{self.file_base}/{urllib.parse.quote(file_path, safe='/')}"
@@ -81,6 +189,55 @@ class TelegramBotClient:
         except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
             raise TelegramBotError(f"Telegram API {method} failed: {exc}") from exc
 
+        if not payload.get("ok"):
+            description = payload.get("description", "unknown error")
+            raise TelegramBotError(f"Telegram API {method} failed: {description}")
+        return payload.get("result")
+
+    def _request_multipart(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        file_field: str,
+        path: Path,
+        timeout: int = 180,
+    ) -> Any:
+        path = Path(path)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        boundary = f"tgexporter-{uuid4().hex}"
+        body = bytearray()
+        for name, value in params.items():
+            body.extend(f"--{boundary}\r\n".encode("ascii"))
+            body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("ascii"))
+            body.extend(str(value).encode("utf-8"))
+            body.extend(b"\r\n")
+        filename = path.name.replace('"', "'").replace("\r", " ").replace("\n", " ")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        body.extend(f"--{boundary}\r\n".encode("ascii"))
+        body.extend(
+            f'Content-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\n'.encode("utf-8")
+        )
+        body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("ascii"))
+        body.extend(path.read_bytes())
+        body.extend(f"\r\n--{boundary}--\r\n".encode("ascii"))
+        request = urllib.request.Request(
+            f"{self.api_base}/{method}",
+            data=bytes(body),
+            headers={
+                "User-Agent": "tgexporter/0.1",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        try:
+            with self.opener.open(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise TelegramBotError(f"Telegram API {method} failed: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            raise TelegramBotError(f"Telegram API {method} failed: {exc}") from exc
         if not payload.get("ok"):
             description = payload.get("description", "unknown error")
             raise TelegramBotError(f"Telegram API {method} failed: {description}")

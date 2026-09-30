@@ -27,6 +27,24 @@ default_group = "chunhui-xuefu"
 interval_seconds = 3600
 max_articles_per_run = 1
 
+[tech_digest]
+output_dir = "发布内容/科技日报"
+target_channel = ""
+schedule_at = "20:00"
+timezone = "Asia/Shanghai"
+articles_per_core = 2
+daily_limit = 16
+candidates_per_source = 12
+
+[tech_digest.translation]
+provider = "libretranslate"
+model_dir = "runtime/translation-models"
+# 以下四项仅在 provider = "openai" 时使用。
+endpoint = "https://api.openai.com/v1/chat/completions"
+model = ""
+api_key_env = "OPENAI_API_KEY"
+timeout_seconds = 90
+
 [telethon]
 enabled = false
 api_id = ""
