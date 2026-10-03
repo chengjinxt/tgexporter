@@ -507,7 +507,8 @@ class TelegramCollector:
         )
 
     def _download_google_image(self, article: ArticleDraft, date_dir: Path) -> list[MediaAsset]:
-        for image_url in google_image_candidates(article, self.proxy_url, self.source_profile_dir):
+        # 1. 优先搜索文章主题相关配图
+        for image_url in google_image_candidates(article, self.proxy_url, self.source_profile_dir, include_logos=False):
             filename = media_filename(
                 article.date_key,
                 article.daily_index,
@@ -529,6 +530,32 @@ class TelegramCollector:
                     path=destination,
                     source="google_image_search",
                     title=f"Google 图片搜索：{article.title}",
+                )
+            ]
+
+        # 2. 若搜索文章配图没有很合适的，使用相关公司的logo图片
+        for image_url in google_image_candidates(article, self.proxy_url, self.source_profile_dir, include_logos=True):
+            filename = media_filename(
+                article.date_key,
+                article.daily_index,
+                "PIC",
+                1,
+                article.title,
+                extension_from_url(image_url, ".jpg"),
+            )
+            destination = date_dir / filename
+            if not download_web_file(image_url, destination, proxy_url=self.proxy_url):
+                continue
+            if not is_suitable_article_image(destination, allow_logo=True):
+                destination.unlink(missing_ok=True)
+                continue
+            return [
+                MediaAsset(
+                    kind="image",
+                    filename=filename,
+                    path=destination,
+                    source="company_logo_search",
+                    title=f"相关公司Logo：{article.title}",
                 )
             ]
         return []
@@ -1107,18 +1134,93 @@ def link_image_candidates(link: LinkRef) -> list[str]:
     return candidates
 
 
+COMMON_COMPANY_ENTITIES = (
+    "快手可灵",
+    "快手",
+    "可灵",
+    "Kling",
+    "微信",
+    "腾讯",
+    "阿里巴巴",
+    "阿里",
+    "百度",
+    "字节跳动",
+    "抖音",
+    "小红书",
+    "美团",
+    "京东",
+    "网易",
+    "新浪",
+    "新浪财经",
+    "华为",
+    "小米",
+    "OPPO",
+    "vivo",
+    "联想",
+    "中兴",
+    "比亚迪",
+    "特斯拉",
+    "Tesla",
+    "OpenAI",
+    "Anthropic",
+    "Google",
+    "谷歌",
+    "Apple",
+    "苹果",
+    "Microsoft",
+    "微软",
+    "Meta",
+    "Nvidia",
+    "英伟达",
+    "AMD",
+    "Intel",
+    "英特尔",
+    "Amazon",
+    "亚马逊",
+    "SpaceX",
+)
+
+
+def extract_company_logo_queries(article: ArticleDraft) -> list[str]:
+    combined_text = f"{article.title} {article.text}"
+    found_entities: list[str] = []
+
+    # 1. 优先匹配预置的常见科技与商业主体词表（按长度倒序，优先长词）
+    for entity in sorted(COMMON_COMPANY_ENTITIES, key=len, reverse=True):
+        if entity.lower() in combined_text.lower():
+            if not any(entity.lower() in existing.lower() for existing in found_entities):
+                found_entities.append(entity)
+
+    # 2. 如果未匹配到，尝试从标题前缀提取主语实体
+    if not found_entities:
+        match = re.match(r"^\s*([A-Za-z0-9\u4e00-\u9fff]{2,12}?)(?:\s|\d|[，。：、]|将于|发布|宣布|上线|推出|计划|获批|称|表示)", article.title)
+        if match:
+            candidate = match.group(1).strip()
+            if len(candidate) >= 2 and candidate not in {"今日", "昨日", "消息", "传闻", "重磅", "独家", "突发"}:
+                found_entities.append(candidate)
+
+    # 3. 构造公司Logo搜索词
+    logo_queries: list[str] = []
+    for entity in found_entities[:3]:
+        append_query(logo_queries, f"{entity} logo")
+        append_query(logo_queries, f"{entity} 官方logo")
+    return logo_queries
+
+
 def google_image_candidates(
     article: ArticleDraft,
     proxy_url: str | None = None,
     profile_dir: Path | None = None,
+    include_logos: bool = False,
 ) -> Iterator[str]:
     seen_urls: set[str] = set()
-    for query in google_image_search_queries(article):
+    queries = extract_company_logo_queries(article) if include_logos else google_image_search_queries(article)
+    for query in queries:
         query_urls = find_google_image_urls(query, proxy_url=proxy_url)
         if not query_urls:
             query_urls = find_google_image_urls_via_browser(query, profile_dir=profile_dir)
         if not query_urls:
-            query_urls = find_bing_image_urls(query, required_terms=image_search_required_terms(article))
+            query_urls = find_bing_image_urls(query, required_terms=image_search_required_terms(article) if not include_logos else None)
         for image_url in query_urls:
             if image_url not in seen_urls:
                 seen_urls.add(image_url)

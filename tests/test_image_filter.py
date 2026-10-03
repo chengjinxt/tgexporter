@@ -48,6 +48,23 @@ def test_is_suitable_article_image_accepts_dark_photo_with_color_detail(tmp_path
     assert is_suitable_article_image(path)
 
 
+def test_is_suitable_article_image_rejects_extreme_aspect_ratio_banner(tmp_path: Path):
+    # 类似黑猫投诉880x180横幅广告，长宽比4.88
+    path = tmp_path / "banner-ad.png"
+    write_checkerboard_png(path, width=880, height=180)
+
+    assert not is_suitable_article_image(path)
+
+
+def test_is_suitable_article_image_accepts_square_company_logo_when_allowed(tmp_path: Path):
+    # 400x400的公司Logo，默认会被拒绝，但在allow_logo=True或is_suitable_logo_image下可被采纳
+    path = tmp_path / "company-logo.png"
+    write_checkerboard_png(path, width=400, height=400)
+
+    assert not is_suitable_article_image(path)
+    assert is_suitable_article_image(path, allow_logo=True)
+
+
 def write_checkerboard_png(path: Path, width: int, height: int) -> None:
     rows = []
     for y in range(height):

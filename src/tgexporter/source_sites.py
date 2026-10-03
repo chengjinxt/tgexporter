@@ -84,9 +84,9 @@ SOURCE_SITE_RULES: dict[str, SourceSiteRule] = {
     "finance.sina.com.cn": SourceSiteRule(
         domain="finance.sina.com.cn",
         name="新浪财经",
-        resource_method="OpenGraph / 正文 img；必要时浏览器截取正文图",
-        fallback_method="Google 图片搜索同标题相似配图",
-        notes="新浪系页面可能有登录、跳转或防盗链，下载图片时优先携带 Referer。",
+        resource_method="OpenGraph / 正文 img；无配图时截取无广告正文内容或搜索相关配图/公司Logo",
+        fallback_method="截取纯净正文或 Google 图片搜索同标题配图及公司Logo",
+        notes="新浪系页面可能有防盗链，下载图片时优先携带 Referer；正文底部常有黑猫投诉等广告轮播，严禁作为文章配图。",
     ),
     "fifa.com": SourceSiteRule(
         domain="fifa.com",

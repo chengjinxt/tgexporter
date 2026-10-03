@@ -1149,3 +1149,68 @@ def test_source_login_prompt_detects_login_or_subscription_sites():
     assert should_prompt_source_login(source_rule_for_url("https://www.axios.com/2026/07/20/ai-us-china-open-source-kimi"))
     assert should_prompt_source_login(source_rule_for_url("https://www.theinformation.com/articles/example"))
     assert should_prompt_source_login(source_rule_for_url("https://www.wsj.com/tech/ai/example"))
+
+
+def test_extract_company_logo_queries_identifies_kuaishou_and_kling():
+    from tgexporter.collector import extract_company_logo_queries
+    from tgexporter.models import ArticleDraft
+
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 10, 1, tzinfo=UTC),
+        date_key="20261001",
+        daily_index=1,
+        title="快手可灵 4.0 将于 10 月上线",
+        text="快手可灵 AI 宣布，Kling 4.0 将于 10 月正式上线，Kling 4.0 Flash 已于 9 月 28 日率先开放小范围体验。",
+    )
+    queries = extract_company_logo_queries(article)
+    assert any("快手" in q for q in queries)
+    assert any("可灵" in q or "kling" in q.lower() for q in queries)
+    assert any("logo" in q.lower() for q in queries)
+
+
+def test_download_google_image_falls_back_to_company_logo(tmp_path: Path, monkeypatch):
+    from tgexporter.collector import TelegramCollector
+    from tgexporter.models import ArticleDraft
+    from tgexporter.placeholder_image import write_placeholder_png
+    from tgexporter.state import StateStore
+    from tgexporter.markdown_renderer import MarkdownRenderer
+
+    collector = TelegramCollector(
+        client=FakeBotClient(),
+        state=StateStore(tmp_path / "state.sqlite"),
+        renderer=MarkdownRenderer(tmp_path / "发布内容"),
+        channel="technologynewssyncassistant",
+    )
+    article = ArticleDraft(
+        source="telegram",
+        channel="technologynewssyncassistant",
+        message_ids=[1],
+        grouped_id=None,
+        published_at=datetime(2026, 10, 1, tzinfo=UTC),
+        date_key="20261001",
+        daily_index=1,
+        title="快手可灵 4.0 将于 10 月上线",
+        text="快手可灵 AI 宣布，Kling 4.0 将于 10 月正式上线。",
+    )
+
+    def fake_google_image_candidates(art, proxy_url=None, profile_dir=None, include_logos=False):
+        if not include_logos:
+            return iter([])
+        return iter(["https://example.com/kuaishou_logo.png"])
+
+    def fake_download_web_file(url, destination, proxy_url=None, referer=None):
+        write_placeholder_png(destination, width=400, height=400)
+        return True
+
+    monkeypatch.setattr("tgexporter.collector.google_image_candidates", fake_google_image_candidates)
+    monkeypatch.setattr("tgexporter.collector.download_web_file", fake_download_web_file)
+    monkeypatch.setattr("tgexporter.collector.is_suitable_article_image", lambda path, allow_logo=False: allow_logo)
+
+    assets = collector._download_google_image(article, tmp_path)
+    assert len(assets) == 1
+    assert assets[0].source == "company_logo_search"
+    assert "Logo" in assets[0].title

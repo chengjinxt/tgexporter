@@ -5,7 +5,7 @@ tgexporter listen --save-dir "E:\PerSourceCodeStore\github\chengjinxt\tgexporter
 tgexporter publish-wechat --article-dir ".\发布内容\20260731"
 注：article-dir 指定文章所在的目录，只遍历直接子级即可，不用进入子目录，如果此目录下有超过8篇文章的情况下，则每次发布完成8篇后，则把已经发布的8篇（md及引用到的文件）移动到子目录下：如： 第1批 ，如果超过16篇，则创建 第2批，依次类推
 
-tgexporter publish-wechat --account movie4k --article-dir ".\发布内容\4K影视屋\20260801"
+tgexporter publish-wechat --account movie4k --article-dir ".\发布内容\4K影视屋\20261003"
 
 信息来源网站查询
 tgexporter stats-domainsstats-domains

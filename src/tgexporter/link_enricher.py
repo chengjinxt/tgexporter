@@ -6,6 +6,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from html.parser import HTMLParser
 
 from .models import LinkRef
 from .network import AdaptiveOpener
@@ -22,14 +23,27 @@ SRCSET_SPLIT_RE = re.compile(r"\s*,\s*")
 IGNORED_DOMAINS = {"mp.weixin.qq.com", "t.me", "telegram.me"}
 WECHAT_ARTICLE_DOMAINS = {"mp.weixin.qq.com"}
 IGNORED_IMAGE_KEYWORDS = (
+    "ad_",
+    "ad-",
+    "ads_",
+    "ads-",
+    "advert",
     "avatar",
+    "banner",
+    "complaint",
+    "fysqfnf9377213",
     "head.jpg",
+    "heimao",
     "icon",
     "images/v2/t.png",
     "logo",
+    "promo",
     "qbitai_icon",
     "qrcode",
     "qr-code",
+    "sinaads",
+    "sponsor",
+    "tousu",
     "wechat",
     "weixin",
     "wx_qrcode",
@@ -156,26 +170,95 @@ def _find_meta(html_text: str, names: tuple[str, ...]) -> str | None:
     return None
 
 
-def find_page_image_urls(html_text: str, base_url: str, limit: int = 12) -> tuple[str, ...]:
-    candidates: list[str] = []
-    for value in _find_meta_values(html_text, IMAGE_META_NAMES):
-        append_image_candidate(candidates, value, base_url)
-    for tag in IMG_TAG_RE.finditer(html_text):
-        tag_text = tag.group(0)
-        for attr in IMAGE_ATTRS:
-            value = _find_attr(tag_text, attr)
-            if value:
-                append_image_candidate(candidates, value, base_url)
-                break
-        srcset = _find_attr(tag_text, "srcset") or _find_attr(tag_text, "data-srcset")
-        if srcset:
-            for part in SRCSET_SPLIT_RE.split(srcset):
-                append_image_candidate(candidates, part.split()[0], base_url)
-                if len(candidates) >= limit:
+class PageImageExtractor(HTMLParser):
+    def __init__(self, base_url: str, limit: int = 12) -> None:
+        super().__init__()
+        self.base_url = base_url
+        self.limit = limit
+        self.candidates: list[str] = []
+        self.article_candidates: list[str] = []
+        self.ignored_depth = 0
+        self.in_article_body = False
+        self.article_body_depth = 0
+        self.has_article_container = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attr_dict = {k.lower(): (v or "") for k, v in attrs}
+        class_name = attr_dict.get("class", "").lower()
+        elem_id = attr_dict.get("id", "").lower()
+        href = attr_dict.get("href", "").lower()
+
+        # 识别广告、轮播推广、二维码及投诉等干扰容器
+        is_ad_container = (
+            any(k in class_name for k in ("ad_", "ad-", "ads_", "ads-", "advert", "banner", "appendqr", "sinaads", "botton-slide", "bottom-slide", "sponsor"))
+            or any(k in elem_id for k in ("ad_", "ad-", "ads_", "ads-", "advert", "banner", "appendqr", "sinaads", "botton-slide", "bottom-slide"))
+            or any(k in href for k in ("tousu.sina", "heimao", "union", "cpro", "doubleclick"))
+        )
+        if is_ad_container or self.ignored_depth > 0:
+            self.ignored_depth += 1
+
+        # 识别主要正文容器（如新浪财经artibody、通用article等）
+        is_body_start = (
+            elem_id == "artibody"
+            or tag == "article"
+            or any(k in class_name for k in ("article-body", "article-content", "main-content", "post-content", "detail-content"))
+        )
+        if is_body_start:
+            self.has_article_container = True
+            self.in_article_body = True
+            self.article_body_depth = 1
+        elif self.in_article_body:
+            self.article_body_depth += 1
+
+        if tag == "img" and self.ignored_depth == 0:
+            for attr_name in IMAGE_ATTRS:
+                src_val = attr_dict.get(attr_name)
+                if src_val:
+                    append_image_candidate(
+                        self.article_candidates if self.in_article_body else self.candidates,
+                        src_val,
+                        self.base_url,
+                    )
                     break
-        if len(candidates) >= limit:
-            break
-    return tuple(candidates[:limit])
+            srcset_val = attr_dict.get("srcset") or attr_dict.get("data-srcset")
+            if srcset_val:
+                for part in SRCSET_SPLIT_RE.split(srcset_val):
+                    append_image_candidate(
+                        self.article_candidates if self.in_article_body else self.candidates,
+                        part.split()[0],
+                        self.base_url,
+                    )
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.ignored_depth > 0:
+            self.ignored_depth -= 1
+        if self.in_article_body:
+            self.article_body_depth -= 1
+            if self.article_body_depth <= 0:
+                self.in_article_body = False
+
+
+def find_page_image_urls(html_text: str, base_url: str, limit: int = 12) -> tuple[str, ...]:
+    meta_candidates: list[str] = []
+    for value in _find_meta_values(html_text, IMAGE_META_NAMES):
+        append_image_candidate(meta_candidates, value, base_url)
+
+    parser = PageImageExtractor(base_url=base_url, limit=limit)
+    try:
+        parser.feed(html_text)
+    except Exception:
+        pass
+
+    # 若网页存在明确正文容器，优先使用正文内部提取的图片；正文无图时不回退到底部外部广告
+    if parser.has_article_container:
+        if parser.article_candidates:
+            combined = parser.article_candidates
+        else:
+            combined = meta_candidates
+    else:
+        combined = meta_candidates + [item for item in parser.candidates if item not in meta_candidates]
+
+    return tuple(combined[:limit])
 
 
 def append_image_candidate(candidates: list[str], value: str, base_url: str) -> None:

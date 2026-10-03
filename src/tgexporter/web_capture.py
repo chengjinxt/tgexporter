@@ -30,17 +30,22 @@ DESKTOP_USER_AGENT = (
 
 IMAGE_CANDIDATE_SCRIPT = """
 (limit) => {
-    const ignored = /(logo|avatar|qrcode|qr-code|icon|sprite|blank|placeholder|weixin|wechat|ad-|ads|advert|banner|promo|sponsor)/i;
+    const ignored = /(logo|avatar|qrcode|qr-code|icon|sprite|blank|placeholder|weixin|wechat|ad-|ads|advert|banner|promo|sponsor|tousu|heimao|sinaads|slider|appendqr)/i;
     const h1 = document.querySelector('h1');
     const h1Box = h1 ? h1.getBoundingClientRect() : null;
     const h1Bottom = h1Box ? h1Box.bottom + window.scrollY : 0;
     const candidates = Array.from(document.images).map((img, index) => {
         const rect = img.getBoundingClientRect();
         const src = img.currentSrc || img.src || '';
-        const text = `${src} ${img.alt || ''} ${img.className || ''} ${img.id || ''}`;
+        const parentAnchor = img.closest('a');
+        const href = parentAnchor ? parentAnchor.getAttribute('href') || '' : '';
+        const inAdContainer = !!img.closest('[class*="ad_"], [class*="ad-"], [class*="advert"], [class*="banner"], [class*="sponsor"], [id*="ad_"], [id*="ads"], [class*="slider"], ins, footer, a[href*="tousu"], a[href*="heimao"], [class*="appendQr"]');
+        const text = `${src} ${href} ${img.alt || ''} ${img.className || ''} ${img.id || ''}`;
         const naturalWidth = img.naturalWidth || rect.width;
         const naturalHeight = img.naturalHeight || rect.height;
         const area = naturalWidth * naturalHeight;
+        const aspect = naturalWidth / (naturalHeight || 1);
+        const isBannerRatio = aspect > 2.6 || aspect < 0.38;
         const visible = rect.width >= 220 && rect.height >= 120 && area >= 100000;
         const top = rect.top + window.scrollY;
         const titleDistance = h1Bottom ? Math.abs(top - h1Bottom) : Math.min(top, 3000);
@@ -49,7 +54,7 @@ IMAGE_CANDIDATE_SCRIPT = """
         const dataPenalty = src.startsWith('data:') ? 500000 : 0;
         const gifPenalty = /(?:\\.gif|%2egif|gif[?&]|format=gif)/i.test(src) ? 900000 : 0;
         const score = area + articleBoost - titleDistance * 700 - tooHighPenalty - dataPenalty - gifPenalty;
-        return { img, index, src, area, top, visible, ignored: ignored.test(text), score };
+        return { img, index, src, area, top, visible, ignored: ignored.test(text) || inAdContainer || isBannerRatio, score };
     }).filter(item => item.visible && !item.ignored && item.src && !item.src.startsWith('data:'));
     candidates.sort((a, b) => b.score - a.score);
     return candidates.slice(0, limit || 8).map(item => item.src);
@@ -100,7 +105,16 @@ def capture_source_image(
 
 def prefers_article_screenshot(url: str) -> bool:
     hostname = (urlparse(url).hostname or "").removeprefix("www.").lower()
-    return hostname in {"x.com", "twitter.com", "weibo.com", "m.weibo.cn"}
+    return hostname in {
+        "x.com",
+        "twitter.com",
+        "weibo.com",
+        "m.weibo.cn",
+        "finance.sina.com.cn",
+        "sina.com.cn",
+        "sina.cn",
+        "cls.cn",
+    }
 
 
 def extract_source_image_urls(
@@ -284,10 +298,68 @@ def screenshot_largest_image(page, destination: Path) -> bool:
 
 
 def screenshot_article_region(page, destination: Path) -> bool:
-    selected = page.evaluate(
-        """
+    try:
+        page.evaluate("() => window.scrollTo(0, 0)")
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+
+    result = page.evaluate(
+        r"""
         () => {
-            const hostname = location.hostname.replace(/^www\\./, '').toLowerCase();
+            // 截图前清理页面内所有常见广告、弹窗、投诉条及二维码，保证正文截图纯净无广告
+            const removeSelectors = [
+                '.SNP-layer', '#SFA_NV_POP_ZW', '[id*="SFA_NV_POP"]', '[class*="SNP-"]',
+                '.top-banner', '.ad_content_bottom', '#article-botton-slide', '#artice_bottom_slider_dot',
+                '.slider-item', '.appendQr_wrap', '.appendQr_normal', '.appendQr_normal_txt',
+                'ins.sinaads', '[class*="sinaads"]', '[class*="ad_"]', '[class*="ad-"]',
+                '[id*="ad_"]', '[id*="ads"]', '[class*="advert"]', '[class*="banner"]',
+                '[class*="sponsor"]', 'a[href*="tousu"]', 'a[href*="heimao"]',
+                '.article-content-right', '.right-content', '.blk_container', '#right_fixed',
+                '.tool-box', '#bottom_tool', '.comment-box', '.bottom_tools', '.article-bottom',
+                '.search', '#search', '.path-search-r', '.wb-share', 'footer'
+            ];
+            for (const sel of removeSelectors) {
+                try {
+                    document.querySelectorAll(sel).forEach(el => {
+                        el.style.display = 'none';
+                        el.remove();
+                    });
+                } catch (e) {}
+            }
+            // 移除所有 fixed 浮动弹窗与遮罩
+            document.querySelectorAll('*').forEach(el => {
+                try {
+                    const style = window.getComputedStyle(el);
+                    if (style.position === 'fixed' && parseInt(style.zIndex || 0) > 50) {
+                        el.remove();
+                    }
+                } catch (e) {}
+            });
+
+            const hostname = location.hostname.replace(/^www\./, '').toLowerCase();
+
+            // 针对新浪财经等页面，进行精确定位（从顶部导航/标题一直到正文最后一个段落，宽度1024）
+            if (hostname.includes('sina.com.cn') || hostname.includes('sina.cn')) {
+                const path = document.querySelector('.path') || document.querySelector('.path-search') || document.querySelector('h1.main-title') || document.querySelector('h1');
+                const art = document.querySelector('#artibody') || document.querySelector('.article') || document.querySelector('.article-content-left');
+                if (path && art) {
+                    const pList = Array.from(art.querySelectorAll('p'));
+                    const lastP = pList.length ? pList[pList.length - 1] : art;
+                    const topRect = path.getBoundingClientRect();
+                    const bottomRect = lastP.getBoundingClientRect();
+                    return {
+                        mode: 'clip',
+                        clip: {
+                            x: Math.max(0, topRect.left - 15),
+                            y: Math.max(0, topRect.top - 15),
+                            width: 1024,
+                            height: Math.round((bottomRect.bottom - topRect.top) + 35)
+                        }
+                    };
+                }
+            }
+
             const domainSelectors = {
                 'x.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
                 'twitter.com': ['article[data-testid="tweet"]', '[data-testid="tweet"]', 'article'],
@@ -304,6 +376,9 @@ def screenshot_article_region(page, destination: Path) -> bool:
                 'wsj.com': ['article', '[data-testid*="article"]', '[class*="article"]', 'main', 'figure'],
                 'theinformation.com': ['article', 'main', '[class*="article"]'],
                 'cls.cn': ['.detail-content', '.article-content', '.article', '.detail', 'main'],
+                'finance.sina.com.cn': ['#artibody', '.article-content', '.main-content', '.article', 'article'],
+                'sina.com.cn': ['#artibody', '.article-content', '.main-content', '.article', 'article'],
+                'sina.cn': ['#artibody', '.article-content', '.main-content', '.article', 'article'],
             };
             const specificSelectors = domainSelectors[hostname] || [];
             const defaultSelectors = [
@@ -325,7 +400,7 @@ def screenshot_article_region(page, destination: Path) -> bool:
                     seen.add(node);
                     const rect = node.getBoundingClientRect();
                     const text = (node.innerText || node.textContent || '').trim();
-                    if (rect.width < 320 || rect.height < 180 || text.length < 80) continue;
+                    if (rect.width < 280 || rect.height < 60 || text.length < 40) continue;
                     const isSpecific = specificSelectors.includes(selector);
                     candidates.push({ node, textLength: text.length, area: rect.width * rect.height, top: rect.top + window.scrollY, isSpecific });
                 }
@@ -333,16 +408,22 @@ def screenshot_article_region(page, destination: Path) -> bool:
             const preferred = candidates.some(item => item.isSpecific) ? candidates.filter(item => item.isSpecific) : candidates;
             preferred.sort((a, b) => (b.textLength + b.area / 2000 - Math.min(b.top, 3000)) - (a.textLength + a.area / 2000 - Math.min(a.top, 3000)));
             document.querySelectorAll('[data-tgexporter-capture]').forEach(node => node.removeAttribute('data-tgexporter-capture'));
-            if (!preferred.length) return false;
+            if (!preferred.length) return null;
             preferred[0].node.setAttribute('data-tgexporter-capture', 'article');
-            return true;
+            return { mode: 'locator' };
         }
         """
     )
-    if not selected:
+    if not result:
         return False
-    locator = page.locator('[data-tgexporter-capture="article"]').first
+
     try:
+        if isinstance(result, dict) and result.get("mode") == "clip":
+            clip = result["clip"]
+            page.screenshot(path=str(destination), clip=clip, timeout=10000)
+            return destination.exists() and destination.stat().st_size > 0
+
+        locator = page.locator('[data-tgexporter-capture="article"]').first
         locator.scroll_into_view_if_needed(timeout=5000)
         box = locator.bounding_box(timeout=5000)
         if not box:
@@ -353,7 +434,7 @@ def screenshot_article_region(page, destination: Path) -> bool:
                 "x": max(box["x"], 0),
                 "y": max(box["y"], 0),
                 "width": min(box["width"], 1100),
-                "height": min(box["height"], 900),
+                "height": min(max(box["height"], 200), 900),
             },
             timeout=10000,
         )

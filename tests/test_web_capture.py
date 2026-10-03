@@ -38,3 +38,13 @@ def test_wsj_empty_verification_page_is_blocked():
     )
 
     assert is_blocked_page(page)
+
+
+def test_image_candidate_script_contains_ad_and_banner_filters():
+    # 验证候选图JS脚本已包含广告容器、黑猫投诉与极端Banner横幅拦截逻辑
+    from tgexporter.web_capture import IMAGE_CANDIDATE_SCRIPT
+
+    assert "tousu" in IMAGE_CANDIDATE_SCRIPT
+    assert "heimao" in IMAGE_CANDIDATE_SCRIPT
+    assert "isBannerRatio" in IMAGE_CANDIDATE_SCRIPT
+    assert "inAdContainer" in IMAGE_CANDIDATE_SCRIPT

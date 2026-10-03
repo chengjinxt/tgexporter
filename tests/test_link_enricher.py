@@ -63,3 +63,49 @@ def test_find_page_image_urls_skips_unescaped_space_in_image_url():
     html = '<meta property="og:image" content="https://example.com/image with spaces.jpg">'
 
     assert find_page_image_urls(html, "https://example.com/article") == ()
+
+
+def test_find_page_image_urls_excludes_sina_bottom_ad_and_qrcode():
+    # 测试新浪财经正文无真实图、但尾部有二维码和黑猫投诉广告时的过滤表现
+    html = """
+    <html>
+    <body>
+        <div id="artibody">
+            <p>快手可灵AI宣布Kling 4.0将于10月正式上线。</p>
+            <div class="appendQr_wrap">
+                <div class="appendQr_normal"><img src="//n.sinaimg.cn/finance/qr123.png"></div>
+            </div>
+        </div>
+        <div class="ad_content_bottom">
+            <div class="article-botton-slide">
+                <a href="http://tousu.sina.com.cn/" class="slider-item">
+                    <img src="//n.sinaimg.cn/finance/heimao_banner.png">
+                </a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    assert find_page_image_urls(html, "https://finance.sina.com.cn/test.shtml") == ()
+
+
+def test_find_page_image_urls_keeps_real_article_image_and_drops_ad():
+    # 测试新浪财经正文内有真实配图，但底部有广告时，仅采纳正文配图
+    html = """
+    <html>
+    <body>
+        <div id="artibody">
+            <p>快手可灵AI宣布Kling 4.0发布。</p>
+            <img src="https://n.sinaimg.cn/finance/kling_real_photo.jpg">
+        </div>
+        <div class="ad_content_bottom">
+            <a href="http://tousu.sina.com.cn/">
+                <img src="https://n.sinaimg.cn/finance/heimao_banner.png">
+            </a>
+        </div>
+    </body>
+    </html>
+    """
+    assert find_page_image_urls(html, "https://finance.sina.com.cn/test.shtml") == (
+        "https://n.sinaimg.cn/finance/kling_real_photo.jpg",
+    )

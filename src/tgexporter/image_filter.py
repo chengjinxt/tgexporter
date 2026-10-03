@@ -7,21 +7,40 @@ LOW_DETAIL_EDGE_THRESHOLD = 3.5
 LOW_DETAIL_UNIQUE_GRAY_LEVELS = 16
 
 
-def is_suitable_article_image(path: Path) -> bool:
+def is_suitable_article_image(path: Path, allow_logo: bool = False) -> bool:
     size = read_image_size(path) or read_pillow_image_size(path)
     if size is None:
         return False
     width, height = size
+    aspect = width / height
+
+    # 若允许作为Logo使用，放宽方图面积限制，但仍排除极端细长条
+    if allow_logo:
+        if width < 220 or height < 120 or (width * height < 50_000):
+            return False
+        if aspect > 3.2 or aspect < 0.5:
+            return False
+        if is_low_information_image(path):
+            return False
+        return True
+
     if width < 300 or height < 160:
         return False
     if width * height < 120_000:
         return False
-    aspect = width / height
+    # 排除极端宽高比的横幅广告条（如880x180等Banner）或极细纵向长条
+    if aspect > 2.6 or aspect < 0.38:
+        return False
     if 0.8 <= aspect <= 1.25 and width * height < 500_000:
         return False
     if is_low_information_image(path):
         return False
     return True
+
+
+def is_suitable_logo_image(path: Path) -> bool:
+    # 判定图片是否适合作为公司Logo备用配图
+    return is_suitable_article_image(path, allow_logo=True)
 
 
 def is_low_information_image(path: Path) -> bool:
