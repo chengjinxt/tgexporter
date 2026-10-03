@@ -26,9 +26,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
-        if not getattr(args, "one_click_draft", False):
-            parser.error("a command is required unless --draft is used")
-        args.func = cmd_draft
+        # 显式请求 GUI 模式
+        if getattr(args, "gui_mode", False):
+            from .gui import launch_gui
+            return launch_gui(args.root)
+        # --draft 走原有全天候草稿流
+        if getattr(args, "one_click_draft", False):
+            args.func = cmd_draft
+        else:
+            # 无参数时默认启动 GUI 界面
+            from .gui import launch_gui
+            return launch_gui(args.root)
     try:
         return int(args.func(args))
     except KeyboardInterrupt:
@@ -48,6 +56,12 @@ def configure_stdio() -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tgexporter")
     parser.add_argument("--root", type=Path, default=default_root(), help="Project root directory.")
+    parser.add_argument(
+        "--gui",
+        dest="gui_mode",
+        action="store_true",
+        help="Launch graphical user interface.",
+    )
     parser.add_argument(
         "--draft",
         dest="one_click_draft",
