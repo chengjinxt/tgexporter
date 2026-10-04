@@ -829,8 +829,23 @@ class TgExporterGUI:
         self._window.mainloop()
 
 
+def _hide_console_window():
+    """在 Windows 上隐藏控制台窗口（GUI 模式下不需要显示）"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        console_window = ctypes.windll.kernel32.GetConsoleWindow()
+        if console_window:
+            # SW_HIDE = 0
+            ctypes.windll.user32.ShowWindow(console_window, 0)
+    except Exception:
+        pass
+
+
 def launch_gui(root_path: Path | None = None) -> int:
     """启动 GUI 界面的入口函数"""
+    _hide_console_window()
     gui = TgExporterGUI(root_path)
     gui.run()
     return 0
