@@ -44,6 +44,10 @@ try {
     if (!(Test-Path $Exe)) {
         throw "Expected exe was not generated: $Exe"
     }
+    & $Exe image-format-check
+    if ($LASTEXITCODE -ne 0) {
+        throw "Packaged executable failed the WebP codec self-check: $Exe"
+    }
     $PortableRuntime = Join-Path $PortableDir "runtime"
     New-Item -ItemType Directory -Path $PortableRuntime -Force | Out-Null
     Copy-Item -LiteralPath $TranslationModels -Destination (Join-Path $PortableRuntime "translation-models") -Recurse -Force

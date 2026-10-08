@@ -162,6 +162,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     translation_check.set_defaults(func=cmd_translation_check)
 
+    image_format_check = subparsers.add_parser(
+        "image-format-check",
+        help="Verify that Pillow can encode and decode WebP images.",
+    )
+    image_format_check.set_defaults(func=cmd_image_format_check)
+
     listen = subparsers.add_parser("listen", help="Listen for new Telegram channel posts.")
     add_channel_argument(listen)
     listen.add_argument("--once", action="store_true", help="Poll once and exit.")
@@ -236,6 +242,15 @@ def cmd_translation_check(args) -> int:
         "zh_to_en": translator.translate_text("新款处理器提升性能并降低功耗。", "zh", "en"),
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_image_format_check(args) -> int:
+    del args
+    from .image_support import verify_webp_support
+
+    result = verify_webp_support()
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

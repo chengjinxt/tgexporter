@@ -18,6 +18,8 @@ from .video_cover import create_video_cover
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_VIDEO_BYTES = 49 * 1024 * 1024
+IMAGE_ACCEPT_HEADER = "image/jpeg,image/png,image/webp;q=0.8,*/*;q=0.5"
+VIDEO_ACCEPT_HEADER = "video/*,application/octet-stream;q=0.8,*/*;q=0.5"
 
 
 class TechDigestMediaCollector:
@@ -146,6 +148,12 @@ class TechDigestMediaCollector:
             if not self.downloader(url, path, actual_referer, MAX_IMAGE_BYTES):
                 path.unlink(missing_ok=True)
                 continue
+            normalized_path = normalize_downloaded_image(path)
+            if normalized_path is None:
+                path.unlink(missing_ok=True)
+                continue
+            path = normalized_path
+            filename = path.name
             if not self.image_validator(path):
                 path.unlink(missing_ok=True)
                 continue
@@ -172,7 +180,9 @@ class TechDigestMediaCollector:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
             ),
-            "Accept": "image/avif,image/webp,image/png,image/jpeg,video/*;q=0.9,*/*;q=0.5",
+            # Prefer formats that Telegram and WeChat accept directly. Some CDNs return WebP
+            # even when the URL ends in .jpg, so downloaded files are normalized below too.
+            "Accept": VIDEO_ACCEPT_HEADER if _video_extension(url) else IMAGE_ACCEPT_HEADER,
         }
         if referer:
             headers["Referer"] = referer
@@ -191,6 +201,57 @@ class TechDigestMediaCollector:
         except (urllib.error.URLError, TimeoutError, OSError, ValueError):
             destination.unlink(missing_ok=True)
             return False
+
+
+def normalize_downloaded_image(path: Path) -> Path | None:
+    """Convert WebP/AVIF responses to a real JPEG with a matching extension."""
+    actual_format = detect_downloaded_image_format(path)
+    if actual_format not in {"WEBP", "AVIF"}:
+        return path
+
+    try:
+        from PIL import Image, ImageOps
+
+        target = path.with_suffix(".jpg")
+        temporary = target.with_name(f".{target.stem}.normalized.jpg")
+        with Image.open(path) as source:
+            normalized = ImageOps.exif_transpose(source)
+            if normalized.mode in {"RGBA", "LA"} or "transparency" in normalized.info:
+                rgba = normalized.convert("RGBA")
+                image = Image.new("RGB", rgba.size, "white")
+                image.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                image = normalized.convert("RGB")
+            image.save(temporary, format="JPEG", quality=92, optimize=True, progressive=True)
+        temporary.replace(target)
+        if target != path:
+            path.unlink(missing_ok=True)
+        return target
+    except Exception as exc:
+        temporary_path = locals().get("temporary")
+        if isinstance(temporary_path, Path):
+            temporary_path.unlink(missing_ok=True)
+        print(f"Downloaded {actual_format} image normalization failed for {path}: {exc}", flush=True)
+        return None
+
+
+def detect_downloaded_image_format(path: Path) -> str | None:
+    try:
+        with path.open("rb") as file:
+            header = file.read(32)
+    except OSError:
+        return None
+    if header.startswith(b"\xff\xd8\xff"):
+        return "JPEG"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "PNG"
+    if header.startswith((b"GIF87a", b"GIF89a")):
+        return "GIF"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "WEBP"
+    if len(header) >= 12 and header[4:8] == b"ftyp" and header[8:12] in {b"avif", b"avis"}:
+        return "AVIF"
+    return None
 
 
 def _copy_limited(source, destination, max_bytes: int) -> bool:

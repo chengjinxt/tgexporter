@@ -11,6 +11,12 @@ requires-python = ">=3.11"
 authors = [
   { name = "chengjinxt" }
 ]
+dependencies = [
+  "Pillow>=10",
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+  "tzdata>=2024.1; platform_system == 'Windows'",
+]
 
 [project.optional-dependencies]
 wechat = ["playwright>=1.45"]

@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from tgexporter.tech_digest import TechCandidate
-from tgexporter.tech_digest_media import TechDigestMediaCollector
+from tgexporter.tech_digest_media import (
+    IMAGE_ACCEPT_HEADER,
+    TechDigestMediaCollector,
+    detect_downloaded_image_format,
+)
 
 
 def tech_candidate(*, images=(), videos=()):
@@ -113,3 +119,39 @@ def test_media_collector_generates_a_local_cover_when_search_also_fails(tmp_path
     assert media[0].kind == "image"
     assert media[0].source == "generated_placeholder"
     assert media[0].path.exists()
+
+
+def test_media_collector_normalizes_mislabeled_webp_to_jpeg(tmp_path):
+    image_module = pytest.importorskip("PIL.Image", reason="Pillow is required")
+
+    def download_webp(_url, destination, _referer, _max_bytes):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        image_module.new("RGB", (1200, 624), "yellow").save(destination, format="WEBP")
+        return True
+
+    collector = TechDigestMediaCollector(
+        output_dir=tmp_path,
+        downloader=download_webp,
+        image_search=lambda _query: [],
+        image_validator=lambda path: detect_downloaded_image_format(path) == "JPEG",
+    )
+
+    media = collector.collect(
+        tech_candidate(images=("https://cdn.example.test/source.jpg",)),
+        date(2026, 10, 8),
+        index=1,
+        title="CDN WebP 配图",
+    )
+
+    assert media[0].source == "original_article_image"
+    assert media[0].path.suffix == ".jpg"
+    assert detect_downloaded_image_format(media[0].path) == "JPEG"
+    with image_module.open(media[0].path) as image:
+        assert image.format == "JPEG"
+        assert image.size == (1200, 624)
+
+
+def test_tech_digest_download_prefers_compatible_image_formats():
+    assert IMAGE_ACCEPT_HEADER.startswith("image/jpeg,image/png")
+    assert "image/webp" in IMAGE_ACCEPT_HEADER
+    assert "image/avif" not in IMAGE_ACCEPT_HEADER

@@ -14,6 +14,12 @@ hiddenimports = []
 sys.path.insert(0, str(ROOT / "src"))
 hiddenimports += collect_submodules("tgexporter")
 
+pillow_datas, pillow_binaries, pillow_hiddenimports = collect_all("PIL")
+datas += pillow_datas
+binaries += pillow_binaries
+hiddenimports += pillow_hiddenimports
+hiddenimports += ["PIL.WebPImagePlugin"]
+
 
 def collect_tree_files(source_dir: Path, target_dir: PurePosixPath):
     collected = []

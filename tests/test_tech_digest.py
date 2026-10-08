@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.parse
 from dataclasses import replace
 from datetime import date, datetime
@@ -223,7 +224,7 @@ def test_tech_digest_clear_published_backs_up_and_only_deletes_the_target_day(tm
     output = capsys.readouterr().out
     assert "date=2026-09-26" in output
     assert "deleted=1" in output
-    assert f"backup={backups[0]}" in output
+    assert os.path.normcase(f"backup={backups[0]}") in os.path.normcase(output)
 
 
 def test_translation_check_command_parses_as_a_standalone_portable_diagnostic():
